@@ -36,6 +36,7 @@ import {
   profileInput,
 } from "./validation";
 import { parseMetadata, analyzeCompatibility, matchesUrl } from "./userscript";
+import { validateSource } from "./source";
 import { importUrl } from "./import-url";
 const current = () => database();
 const audit = async (uid: string, action: string, resourceId?: string) => {
@@ -108,7 +109,7 @@ async function listRegistry(req: Request, mode = "search", ownerId?: string) {
       ? sql`${t.scripts.tags} @> ${JSON.stringify([p.tag])}::jsonb`
       : undefined,
     p.website
-      ? sql`exists (select 1 from script_versions v join script_metadata m on m.version_id=v.id where v.script_id=${t.scripts.id} and v.revision=${t.scripts.revision} and m.directives::text ilike ${"%" + p.website.replace(/[\\%_]/g, "\\$&") + "%"})`
+      ? sql`exists (select 1 from script_versions v join script_metadata m on m.version_id=v.id where v.script_id=${t.scripts.id} and v.revision=${t.scripts.revision} and (coalesce(m.directives->'match','[]'::jsonb) || coalesce(m.directives->'include','[]'::jsonb))::text ilike ${"%" + p.website.replace(/[\\%_]/g, "\\$&") + "%"})`
       : undefined,
   );
   const installs = sql<number>`(select count(*)::int from installations i where i.script_id=${t.scripts.id})`;
@@ -206,7 +207,7 @@ export async function route(req: Request, parts: string[]): Promise<Response> {
       const input = await body(req, scriptInput);
       let meta;
       try {
-        meta = parseMetadata(input.source);
+        meta = validateSource(input.source);
       } catch (e) {
         return fail(400, "INVALID_METADATA", (e as Error).message);
       }
@@ -335,9 +336,15 @@ export async function route(req: Request, parts: string[]): Promise<Response> {
     owned(s.ownerId, u.id);
     if (action === "versions" && method === "POST") {
       const input = await body(req, versionInput);
+      const details = {
+        visibility: input.visibility,
+        category: input.category,
+        tags: input.tags,
+        screenshots: input.screenshots,
+      };
       let meta;
       try {
-        meta = parseMetadata(input.source);
+        meta = validateSource(input.source);
       } catch (e) {
         return fail(400, "INVALID_METADATA", (e as Error).message);
       }
@@ -383,6 +390,7 @@ export async function route(req: Request, parts: string[]): Promise<Response> {
         await tx
           .update(t.scripts)
           .set({
+            ...details,
             revision: locked.revision + 1,
             name: meta.name[0],
             description: meta.description?.[0] ?? "",
@@ -749,7 +757,7 @@ export async function route(req: Request, parts: string[]): Promise<Response> {
     let source;
     try {
       source = await importUrl(input.url);
-      return ok({ source, metadata: parseMetadata(source) });
+      return ok({ source, metadata: validateSource(source) });
     } catch (e) {
       if (e instanceof HttpError) throw e;
       return fail(400, "IMPORT_FAILED", (e as Error).message);

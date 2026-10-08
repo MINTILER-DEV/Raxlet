@@ -40,8 +40,12 @@ export function Authorize() {
       );
       return;
     }
+    const disconnected = () =>
+      opener.postMessage({ type: "raxlet-disconnected", nonce }, target);
+    window.addEventListener("pagehide", disconnected);
     const ready = () => {
       if (Date.now() > new Date(authorization.expiresAt).getTime()) {
+        disconnected();
         port.current?.close();
         setError("Authorization expired. Close this window and link again.");
         return;
@@ -120,6 +124,7 @@ export function Authorize() {
     }, 750);
     const expiry = setTimeout(
       () => {
+        disconnected();
         port.current?.close();
         setConnected(false);
         setError("Authorization expired. Link again from the target page.");
@@ -128,6 +133,8 @@ export function Authorize() {
     );
     return () => {
       active = false;
+      disconnected();
+      window.removeEventListener("pagehide", disconnected);
       clearInterval(interval);
       clearTimeout(expiry);
       window.removeEventListener("message", connect);

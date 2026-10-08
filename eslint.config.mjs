@@ -2,7 +2,18 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 import hooks from "eslint-plugin-react-hooks";
 export default tseslint.config(
-  { ignores: [".next/**", "public/**", "drizzle/**", "next-env.d.ts"] },
+  {
+    ignores: [
+      ".next/**",
+      "public/**",
+      "drizzle/**",
+      "next-env.d.ts",
+      "test-results/**",
+      "playwright-report/**",
+      "local/**",
+      "coverage/**",
+    ],
+  },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {

@@ -20,6 +20,7 @@ import {
   assertMutationOrigin,
 } from "@/lib/http";
 import { isPublicAddress } from "@/lib/import-url";
+import { validateSource } from "@/lib/source";
 import { bookmarklet, launcherSnippet } from "@/lib/bookmarklet";
 describe("userscript metadata", () => {
   it("preserves repeated and unknown directives without prototype pollution", () => {
@@ -235,4 +236,20 @@ describe("authorization boundaries and validation", () => {
     expect(code).not.toMatch(/token|password|userId/);
     expect(() => new Function(code)).not.toThrow();
   });
+});
+
+describe("source syntax validation", () => {
+  it("allows supported async script bodies without executing them", () =>
+    expect(
+      validateSource(template + "\nawait Promise.resolve(); return;").version,
+    ).toEqual(["1.0.0"]));
+  it.each([
+    "const broken = ;",
+    "import x from 'outside';",
+    "export const x = 1;",
+  ])("rejects invalid or module source", (code) =>
+    expect(() => validateSource(template + "\n" + code)).toThrow(
+      /Invalid JavaScript/,
+    ),
+  );
 });

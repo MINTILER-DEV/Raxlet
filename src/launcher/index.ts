@@ -137,10 +137,26 @@ import { execute } from "./engine";
       !popup ||
       e.source !== popup ||
       e.origin !== raxletOrigin ||
-      e.data?.type !== "raxlet-ready" ||
       e.data?.nonce !== nonce
     )
       return;
+    if (e.data?.type === "raxlet-disconnected") {
+      const error = new Error(
+        "Account link closed, expired, or revoked. Link again.",
+      );
+      port?.close();
+      port = null;
+      entries = [];
+      for (const item of pending.values()) {
+        clearTimeout(item.timer);
+        item.reject(error);
+      }
+      pending.clear();
+      status.textContent = error.message;
+      showLink();
+      return;
+    }
+    if (e.data?.type !== "raxlet-ready") return;
     port?.close();
     const channel = new MessageChannel();
     port = channel.port1;

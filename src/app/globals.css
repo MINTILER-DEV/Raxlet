@@ -746,3 +746,16 @@ th {
     overflow: auto;
   }
 }
+
+.text-lime-400 {
+  color: var(--accent);
+}
+.dialog-content {
+  background: var(--bg);
+  color: var(--fg);
+  border-color: var(--border);
+}
+
+.dialog-content .text-zinc-400 {
+  color: var(--muted);
+}

@@ -1,4 +1,5 @@
 import http from "node:http";
+import { URL } from "node:url";
 const server = http.createServer((req, res) => {
   if (req.url === "/blocked") {
     res.setHeader(
@@ -9,7 +10,7 @@ const server = http.createServer((req, res) => {
   if (req.url === "/no-eval") {
     res.setHeader(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self' http://localhost:3000; style-src 'self' 'unsafe-inline'",
+      `default-src 'self'; script-src 'self' ${new URL(process.env.RAXLET_TEST_URL ?? "http://localhost:3000").origin}; style-src 'self' 'unsafe-inline'`,
     );
   }
   if (req.url === "/isolated") {

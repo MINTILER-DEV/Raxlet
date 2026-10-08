@@ -8,8 +8,9 @@ const variants = cva(
     variants: {
       variant: {
         default: "bg-lime-400 text-zinc-950 hover:bg-lime-300",
-        outline: "border border-zinc-700 bg-transparent hover:bg-zinc-800",
-        ghost: "hover:bg-zinc-800",
+        outline:
+          "border border-[var(--border)] bg-transparent hover:bg-[var(--panel-hover)]",
+        ghost: "hover:bg-[var(--panel-hover)]",
         destructive: "bg-red-600 text-white hover:bg-red-500",
       },
       size: { default: "h-10 px-4 py-2", sm: "h-8 px-3", icon: "h-10 w-10" },

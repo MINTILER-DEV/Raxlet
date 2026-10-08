@@ -59,6 +59,8 @@ npx playwright install chromium
 # Set DATABASE_URL to a disposable browser-test database with migrations applied.
 # Set BETTER_AUTH_URL=http://localhost:3000 and BETTER_AUTH_SECRET.
 npm run test:browser
+# If port 3000 is busy, use matching BETTER_AUTH_URL and RAXLET_TEST_URL:
+# BETTER_AUTH_URL=http://localhost:3917 RAXLET_TEST_URL=http://localhost:3917 npm run test:browser
 ```
 
 See [deployment](docs/deployment.md), [API](docs/api.md), and [security and compatibility](docs/security.md). The website also includes `/docs/getting-started`, `/docs/launcher`, `/docs/userscripts`, `/docs/compatibility`, and `/docs/api`.

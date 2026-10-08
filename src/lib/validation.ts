@@ -18,13 +18,6 @@ export const scriptInput = z
     changelog: z.string().max(4000).default(""),
   })
   .strict();
-export const versionInput = z
-  .object({
-    source: sourceSchema,
-    expectedRevision: z.number().int().positive(),
-    changelog: z.string().max(4000).default(""),
-  })
-  .strict();
 export const scriptPatch = z
   .object({
     visibility: visibilitySchema.optional(),
@@ -37,6 +30,10 @@ export const scriptPatch = z
     expectedRevision: z.number().int().positive(),
   })
   .strict();
+export const versionInput = scriptPatch.extend({
+  source: sourceSchema,
+  changelog: z.string().max(4000).default(""),
+});
 export const libraryPatch = z
   .object({
     enabled: z.boolean().optional(),
@@ -51,7 +48,14 @@ export const libraryPatch = z
       .optional(),
     confirmed: z.literal(true).optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) =>
+      ["enabled", "pinned", "versionId", "settings"].some((key) =>
+        Object.hasOwn(value, key),
+      ),
+    "Provide at least one entry setting to update.",
+  );
 export const pagination = z.object({
   page: z.coerce.number().int().min(1).max(10000).default(1),
   limit: z.coerce.number().int().min(1).max(50).default(20),

@@ -1,4 +1,4 @@
-import { valid } from "semver";
+import valid from "semver/functions/valid";
 export type ScriptMetadata = Record<string, string[]>;
 export type Compatibility = {
   supported: boolean;

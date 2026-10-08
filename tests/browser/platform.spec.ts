@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { launcherSnippet } from "../../src/lib/bookmarklet";
-const base = "http://localhost:3000";
+const base = process.env.RAXLET_TEST_URL ?? "http://localhost:3000";
 const fixture = `// ==UserScript==
 // @name Browser verification
 // @version 1.0.0
@@ -31,13 +31,12 @@ async function register(page: Page) {
 }
 async function create(page: Page) {
   await page.goto("/dashboard/editor");
-  await page
-    .locator('input[type="file"]')
-    .setInputFiles({
-      name: "verification.user.js",
-      mimeType: "text/javascript",
-      buffer: Buffer.from(fixture),
-    });
+  await expect(page.locator(".monaco-editor")).toBeVisible();
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "verification.user.js",
+    mimeType: "text/javascript",
+    buffer: Buffer.from(fixture),
+  });
   await expect(page.getByText("Browser verification · v1.0.0")).toBeVisible();
   await page.getByRole("button", { name: "Save script", exact: true }).click();
   await expect(page.getByText("Script saved", { exact: true })).toBeVisible();
@@ -121,10 +120,12 @@ test("register, self-hosted Monaco, import, scoped popup bridge, execution, GM p
   await expect(app.getByLabel("Settings JSON")).toHaveValue(/"runs": 2/);
   await app.getByRole("button", { name: "Close dialog" }).click();
   await popup.getByRole("button", { name: "Revoke access" }).click();
-  await launcher.getByRole("button", { name: "Refresh library" }).click();
   await expect(launcher.getByRole("status")).toHaveText(
-    /Authorization expired or revoked/,
+    /closed, expired, or revoked/,
   );
+  await expect(
+    launcher.getByRole("button", { name: "Link account", exact: true }),
+  ).toBeVisible();
   expect(
     thirdPartyRequests.every(
       (r) =>
@@ -183,4 +184,23 @@ test("responsive home and navigation contain real empty state", async ({
     .click();
   await expect(page).toHaveURL(/explore/);
   await page.screenshot({ path: "test-results/mobile.png" });
+});
+
+test("cross-origin opener isolation reports an unavailable account connection", async ({
+  page,
+}) => {
+  await register(page);
+  await page.goto("http://127.0.0.1:4311/isolated");
+  await page.evaluate(launcherSnippet(base));
+  const popupPromise = page.waitForEvent("popup");
+  await page
+    .locator("#raxlet-launcher")
+    .getByRole("button", { name: "Link account", exact: true })
+    .click();
+  const popup = await popupPromise;
+  await popup.getByRole("button", { name: "Approve for 15 minutes" }).click();
+  await expect(popup.locator("p[role=alert]")).toHaveText(
+    /Popup connection unavailable/,
+  );
+  await expect(page.locator("#result")).toHaveText("Not run");
 });

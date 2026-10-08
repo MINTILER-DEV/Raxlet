@@ -6,11 +6,8 @@ import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Save, Upload, Download, Code2 } from "lucide-react";
 import { api, mutation } from "@/lib/client";
-import {
-  parseMetadata,
-  analyzeCompatibility,
-  template,
-} from "@/lib/userscript";
+import { analyzeCompatibility, template } from "@/lib/userscript";
+import { validateSource } from "@/lib/source";
 import type { ScriptDetail } from "@/lib/types";
 import { Button } from "./ui/button";
 import { ConfirmDialog } from "./ui/dialog";
@@ -32,6 +29,22 @@ export function ScriptEditor({ publish = false }: { publish?: boolean }) {
   const [tags, setTags] = useState("");
   const [screenshots, setScreenshots] = useState("");
   const [changelog, setChangelog] = useState("");
+  const [savedDetails, setSavedDetails] = useState(
+    JSON.stringify({
+      visibility: publish ? "public" : "private",
+      category: "Utilities",
+      tags: "",
+      screenshots: "",
+      changelog: "",
+    }),
+  );
+  const detailsSnapshot = JSON.stringify({
+    visibility,
+    category,
+    tags,
+    screenshots,
+    changelog,
+  });
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(!!scriptId);
   const [error, setError] = useState("");
@@ -40,7 +53,7 @@ export function ScriptEditor({ publish = false }: { publish?: boolean }) {
   const file = useRef<HTMLInputElement>(null);
   const analysis = useMemo(() => {
     try {
-      const metadata = parseMetadata(source);
+      const metadata = validateSource(source);
       return {
         metadata,
         compatibility: analyzeCompatibility(metadata, source),
@@ -54,7 +67,8 @@ export function ScriptEditor({ publish = false }: { publish?: boolean }) {
       };
     }
   }, [source]);
-  const dirty = source !== saved;
+  const sourceDirty = source !== saved;
+  const dirty = sourceDirty || detailsSnapshot !== savedDetails;
   useEffect(() => {
     if (!scriptId) return;
     api<ScriptDetail>(`scripts/${scriptId}`)
@@ -66,6 +80,15 @@ export function ScriptEditor({ publish = false }: { publish?: boolean }) {
         setCategory(s.category);
         setTags(s.tags.join(", "));
         setScreenshots(s.screenshots.join("\n"));
+        setSavedDetails(
+          JSON.stringify({
+            visibility: s.visibility,
+            category: s.category,
+            tags: s.tags.join(", "),
+            screenshots: s.screenshots.join("\n"),
+            changelog: "",
+          }),
+        );
       })
       .catch((e) => setError(e.message))
       .finally(() => setLoading(false));
@@ -95,35 +118,36 @@ export function ScriptEditor({ publish = false }: { publish?: boolean }) {
     setBusy(true);
     setError("");
     try {
+      const details = {
+        visibility,
+        category,
+        tags: tags
+          .split(",")
+          .map((v) => v.trim())
+          .filter(Boolean),
+        screenshots: screenshots
+          .split("\n")
+          .map((v) => v.trim())
+          .filter(Boolean),
+      };
       let s = script;
       if (s) {
-        if (dirty) {
+        if (sourceDirty) {
           await api(
             `scripts/${s.id}/versions`,
             mutation("POST", {
               source,
               expectedRevision: s.revision,
               changelog,
+              ...details,
             }),
           );
           s = await api<ScriptDetail>(`scripts/${s.id}`);
-        }
-        await api(
-          `scripts/${s.id}`,
-          mutation("PATCH", {
-            visibility,
-            category,
-            tags: tags
-              .split(",")
-              .map((v) => v.trim())
-              .filter(Boolean),
-            screenshots: screenshots
-              .split("\n")
-              .map((v) => v.trim())
-              .filter(Boolean),
-            expectedRevision: s.revision,
-          }),
-        );
+        } else
+          await api(
+            `scripts/${s.id}`,
+            mutation("PATCH", { ...details, expectedRevision: s.revision }),
+          );
         s = await api<ScriptDetail>(`scripts/${s.id}`);
       } else {
         const created = await api<{ id: string }>(
@@ -149,6 +173,15 @@ export function ScriptEditor({ publish = false }: { publish?: boolean }) {
       setScript(s);
       setSaved(source);
       setChangelog("");
+      setSavedDetails(
+        JSON.stringify({
+          visibility,
+          category,
+          tags,
+          screenshots,
+          changelog: "",
+        }),
+      );
       toast.success(
         visibility === "public" ? "Script published" : "Script saved",
       );

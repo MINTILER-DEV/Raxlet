@@ -165,6 +165,41 @@ describe("real PostgreSQL platform lifecycle", () => {
       (await request("scripts", "POST", { source: "bad" }, alice)).status,
     ).toBe(400);
   });
+  it("rejects invalid syntax, empty entry patches, and unconfirmed/unsafe URL imports", async () => {
+    expect(
+      (
+        await request(
+          "scripts",
+          "POST",
+          { source: template + "\nconst bad = ;" },
+          alice,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (await request(`library/${entryId}`, "PATCH", {}, alice)).status,
+    ).toBe(400);
+    expect(
+      (
+        await request(
+          "import",
+          "POST",
+          { url: "https://example.com/a.user.js" },
+          alice,
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await request(
+          "import",
+          "POST",
+          { url: "https://127.0.0.1/a.user.js", confirmed: true },
+          alice,
+        )
+      ).status,
+    ).toBe(400);
+  });
   it("supports unlisted direct links without public discovery", async () => {
     expect(
       (
@@ -246,6 +281,36 @@ describe("real PostgreSQL platform lifecycle", () => {
     expect(
       (await request("library", "GET", undefined, bob)).json.data[0].version,
     ).toBe("1.0.0");
+  });
+  it("serializes competing saves and validates metadata before committing a version", async () => {
+    const attempts = await Promise.all(
+      ["1.2.0", "1.3.0"].map((version) =>
+        request(
+          `scripts/${scriptId}/versions`,
+          "POST",
+          { source: template.replace("1.0.0", version), expectedRevision: 2 },
+          alice,
+        ),
+      ),
+    );
+    expect(attempts.map((r) => r.status).sort()).toEqual([201, 409]);
+    const before = (await request(`scripts/${scriptId}`)).json.data;
+    expect(before.revision).toBe(3);
+    expect(
+      (
+        await request(
+          `scripts/${scriptId}/versions`,
+          "POST",
+          {
+            source: template.replace("1.0.0", "2.0.0"),
+            expectedRevision: 3,
+            screenshots: ["http://unsafe.test/image.png"],
+          },
+          alice,
+        )
+      ).status,
+    ).toBe(400);
+    expect((await request(`scripts/${scriptId}`)).json.data.revision).toBe(3);
   });
   it("updates require review and disable the installed script", async () => {
     const s = (await request(`scripts/${scriptId}`)).json.data;
