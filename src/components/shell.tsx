@@ -2,15 +2,160 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState, useEffect } from "react";
-import { Terminal, Compass, Flame, Clock3, Library, Code2, Layers3, Rocket, Activity, Settings, BookOpen, Sun, Moon, Menu, X, ArrowUpRight } from "lucide-react";
+import {
+  Terminal,
+  Compass,
+  Flame,
+  Clock3,
+  Library,
+  Code2,
+  Layers3,
+  Rocket,
+  Activity,
+  Settings,
+  BookOpen,
+  Sun,
+  Moon,
+  Menu,
+  X,
+  ArrowUpRight,
+} from "lucide-react";
 import { authClient } from "@/lib/client";
 import { Button } from "./ui/button";
-const links=[{href:"/explore",label:"Explore",icon:Compass},{href:"/trending",label:"Trending",icon:Flame},{href:"/latest",label:"Latest",icon:Clock3}];
-const personal=[{href:"/dashboard/library",label:"My library",icon:Library},{href:"/dashboard/scripts",label:"My scripts",icon:Code2},{href:"/dashboard/collections",label:"Collections",icon:Layers3},{href:"/dashboard/launcher",label:"Launcher",icon:Rocket},{href:"/dashboard/activity",label:"Activity",icon:Activity},{href:"/dashboard/settings",label:"Settings",icon:Settings}];
-export function Shell({children}:{children:React.ReactNode}) {
-  const path=usePathname();const {data:session}=authClient.useSession();const [light,setLight]=useState(false);const [menu,setMenu]=useState(false);
-  useEffect(()=>{const isLight=localStorage.getItem("raxlet-theme")==="light";setLight(isLight);document.documentElement.dataset.theme=isLight?"light":"dark";},[]);
-  const nav=(items:typeof links)=>items.map(({href,label,icon:Icon})=><Link key={href} href={href} onClick={()=>setMenu(false)} className={`nav-link ${path===href?"active":""}`}><Icon size={17}/>{label}</Link>);
-  if(path==="/authorize")return <main className="mx-auto max-w-2xl p-8">{children}</main>;
-  return <div className="app-shell"><aside className={`sidebar ${menu?"mobile-open":""}`}><Link href="/" className="brand"><span className="brand-icon"><Terminal size={22}/></span>raxlet<span className="brand-dot">.</span></Link><Button className="mobile-close" variant="ghost" aria-label="Close navigation" onClick={()=>setMenu(false)}><X/></Button><p className="nav-label">DISCOVER</p>{nav(links)}<p className="nav-label">WORKSPACE</p>{nav(personal)}<div className="sidebar-bottom"><Link href="/docs/getting-started" className="nav-link"><BookOpen size={17}/>Documentation<ArrowUpRight size={14}/></Link><div className="sidebar-note"><span className="status-dot"/> Open source. Yours to run.</div></div></aside><div className="main-shell"><header className="topbar"><Button className="mobile-toggle" variant="ghost" aria-label="Open navigation" onClick={()=>setMenu(true)}><Menu/></Button><span className="breadcrumb">Raxlet <span>/</span> {path==="/"?"Home":path.split("/").filter(Boolean).at(-1)?.replaceAll("-"," ")}</span><div className="top-actions"><button aria-label="Toggle color theme" className="icon-button" onClick={()=>{const next=!light;setLight(next);localStorage.setItem("raxlet-theme",next?"light":"dark");document.documentElement.dataset.theme=next?"light":"dark";}}>{light?<Moon size={18}/>:<Sun size={18}/>}</button>{session?<><Link href="/dashboard/library" className="account-name">{session.user.name}</Link><Button size="sm" variant="outline" onClick={async()=>{await authClient.signOut();location.href="/";}}>Sign out</Button></>:<><Link href="/login" className="text-sm">Sign in</Link><Button size="sm" asChild><Link href="/register">Create account</Link></Button></>}</div></header><main className="page-content">{children}</main><footer>Raxlet · Scripts in your hands.<Link href="/docs/compatibility">Compatibility & security</Link></footer></div></div>;
+const links = [
+  { href: "/explore", label: "Explore", icon: Compass },
+  { href: "/trending", label: "Trending", icon: Flame },
+  { href: "/latest", label: "Latest", icon: Clock3 },
+];
+const personal = [
+  { href: "/dashboard/library", label: "My library", icon: Library },
+  { href: "/dashboard/scripts", label: "My scripts", icon: Code2 },
+  { href: "/dashboard/collections", label: "Collections", icon: Layers3 },
+  { href: "/dashboard/launcher", label: "Launcher", icon: Rocket },
+  { href: "/dashboard/activity", label: "Activity", icon: Activity },
+  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+];
+export function Shell({ children }: { children: React.ReactNode }) {
+  const path = usePathname();
+  const { data: session } = authClient.useSession();
+  const [light, setLight] = useState(false);
+  const [menu, setMenu] = useState(false);
+  useEffect(() => {
+    const isLight = localStorage.getItem("raxlet-theme") === "light";
+    setLight(isLight);
+    document.documentElement.dataset.theme = isLight ? "light" : "dark";
+  }, []);
+  const nav = (items: typeof links) =>
+    items.map(({ href, label, icon: Icon }) => (
+      <Link
+        key={href}
+        href={href}
+        onClick={() => setMenu(false)}
+        className={`nav-link ${path === href ? "active" : ""}`}
+      >
+        <Icon size={17} />
+        {label}
+      </Link>
+    ));
+  if (path === "/authorize")
+    return <main className="mx-auto max-w-2xl p-8">{children}</main>;
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${menu ? "mobile-open" : ""}`}>
+        <Link href="/" className="brand">
+          <span className="brand-icon">
+            <Terminal size={22} />
+          </span>
+          raxlet<span className="brand-dot">.</span>
+        </Link>
+        <Button
+          className="mobile-close"
+          variant="ghost"
+          aria-label="Close navigation"
+          onClick={() => setMenu(false)}
+        >
+          <X />
+        </Button>
+        <p className="nav-label">DISCOVER</p>
+        {nav(links)}
+        <p className="nav-label">WORKSPACE</p>
+        {nav(personal)}
+        <div className="sidebar-bottom">
+          <Link href="/docs/getting-started" className="nav-link">
+            <BookOpen size={17} />
+            Documentation
+            <ArrowUpRight size={14} />
+          </Link>
+          <div className="sidebar-note">
+            <span className="status-dot" /> Open source. Yours to run.
+          </div>
+        </div>
+      </aside>
+      <div className="main-shell">
+        <header className="topbar">
+          <Button
+            className="mobile-toggle"
+            variant="ghost"
+            aria-label="Open navigation"
+            onClick={() => setMenu(true)}
+          >
+            <Menu />
+          </Button>
+          <span className="breadcrumb">
+            Raxlet <span>/</span>{" "}
+            {path === "/"
+              ? "Home"
+              : path.split("/").filter(Boolean).at(-1)?.replaceAll("-", " ")}
+          </span>
+          <div className="top-actions">
+            <button
+              aria-label="Toggle color theme"
+              className="icon-button"
+              onClick={() => {
+                const next = !light;
+                setLight(next);
+                localStorage.setItem("raxlet-theme", next ? "light" : "dark");
+                document.documentElement.dataset.theme = next
+                  ? "light"
+                  : "dark";
+              }}
+            >
+              {light ? <Moon size={18} /> : <Sun size={18} />}
+            </button>
+            {session ? (
+              <>
+                <Link href="/dashboard/library" className="account-name">
+                  {session.user.name}
+                </Link>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    await authClient.signOut();
+                    location.href = "/";
+                  }}
+                >
+                  Sign out
+                </Button>
+              </>
+            ) : (
+              <>
+                <Link href="/login" className="text-sm">
+                  Sign in
+                </Link>
+                <Button size="sm" asChild>
+                  <Link href="/register">Create account</Link>
+                </Button>
+              </>
+            )}
+          </div>
+        </header>
+        <main className="page-content">{children}</main>
+        <footer>
+          Raxlet · Scripts in your hands.
+          <Link href="/docs/compatibility">Compatibility & security</Link>
+        </footer>
+      </div>
+    </div>
+  );
 }

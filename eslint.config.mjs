@@ -1,4 +1,20 @@
-import { defineConfig, globalIgnores } from "eslint/config";
-import next from "eslint-config-next/core-web-vitals";
-import ts from "eslint-config-next/typescript";
-export default defineConfig([...next,...ts,globalIgnores([".next/**","public/launcher.js","public/monaco/**","drizzle/**"]),{rules:{"react-hooks/set-state-in-effect":"off"}}]);
+import eslint from "@eslint/js";
+import tseslint from "typescript-eslint";
+import hooks from "eslint-plugin-react-hooks";
+export default tseslint.config(
+  { ignores: [".next/**", "public/**", "drizzle/**", "next-env.d.ts"] },
+  eslint.configs.recommended,
+  ...tseslint.configs.recommended,
+  {
+    files: ["**/*.ts", "**/*.tsx"],
+    plugins: { "react-hooks": hooks },
+    rules: {
+      ...hooks.configs.recommended.rules,
+      "react-hooks/set-state-in-effect": "off",
+    },
+  },
+  {
+    files: ["**/*.mjs"],
+    languageOptions: { globals: { console: "readonly", process: "readonly" } },
+  },
+);

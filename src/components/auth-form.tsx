@@ -3,7 +3,97 @@ import Link from "next/link";
 import { useState } from "react";
 import { authClient } from "@/lib/client";
 import { Button } from "./ui/button";
-export function AuthForm({register=false}:{register?:boolean}) {
- const [busy,setBusy]=useState(false);const [error,setError]=useState("");
- return <div className="card auth-card"><div className="eyebrow">YOUR RAXLET WORKSPACE</div><h1>{register?"Make yourself at home.":"Welcome back."}</h1><p className="muted">{register?"Create an account to start your script library.":"Sign in to your library and your scripts."}</p><form className="form-stack" onSubmit={async e=>{e.preventDefault();const data=new FormData(e.currentTarget);setBusy(true);setError("");try{const credentials={email:String(data.get("email")),password:String(data.get("password"))};const result=register?await authClient.signUp.email({...credentials,name:String(data.get("name"))}):await authClient.signIn.email(credentials);if(result.error)throw new Error(result.error.message);const next=new URLSearchParams(location.search).get("next");location.href=next?.startsWith("/")&&!next.startsWith("//")?next:"/dashboard/library";}catch(e){setError((e as Error).message);}finally{setBusy(false);}}}>{register&&<label>Display name<input name="name" required maxLength={80} autoComplete="name"/></label>}<label>Email<input name="email" type="email" required autoComplete="email" maxLength={254}/></label><label>Password<input name="password" type="password" minLength={12} maxLength={128} required autoComplete={register?"new-password":"current-password"}/></label>{register&&<p className="muted text-xs">Use at least 12 characters.</p>}{error&&<p role="alert" className="alert error">{error}</p>}<Button disabled={busy}>{busy?"Please wait…":register?"Create account":"Sign in"}</Button></form><p className="auth-note">{register?"Already have an account?":"New to Raxlet?"} <Link className="text-lime-400" href={register?"/login":"/register"}>{register?"Sign in":"Create account"}</Link></p></div>;
+export function AuthForm({ register = false }: { register?: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  return (
+    <div className="card auth-card">
+      <div className="eyebrow">YOUR RAXLET WORKSPACE</div>
+      <h1>{register ? "Make yourself at home." : "Welcome back."}</h1>
+      <p className="muted">
+        {register
+          ? "Create an account to start your script library."
+          : "Sign in to your library and your scripts."}
+      </p>
+      <form
+        className="form-stack"
+        onSubmit={async (e) => {
+          e.preventDefault();
+          const data = new FormData(e.currentTarget);
+          setBusy(true);
+          setError("");
+          try {
+            const credentials = {
+              email: String(data.get("email")),
+              password: String(data.get("password")),
+            };
+            const result = register
+              ? await authClient.signUp.email({
+                  ...credentials,
+                  name: String(data.get("name")),
+                })
+              : await authClient.signIn.email(credentials);
+            if (result.error) throw new Error(result.error.message);
+            const next = new URLSearchParams(location.search).get("next");
+            location.href =
+              next?.startsWith("/") && !next.startsWith("//")
+                ? next
+                : "/dashboard/library";
+          } catch (e) {
+            setError((e as Error).message);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {register && (
+          <label>
+            Display name
+            <input name="name" required maxLength={80} autoComplete="name" />
+          </label>
+        )}
+        <label>
+          Email
+          <input
+            name="email"
+            type="email"
+            required
+            autoComplete="email"
+            maxLength={254}
+          />
+        </label>
+        <label>
+          Password
+          <input
+            name="password"
+            type="password"
+            minLength={12}
+            maxLength={128}
+            required
+            autoComplete={register ? "new-password" : "current-password"}
+          />
+        </label>
+        {register && (
+          <p className="muted text-xs">Use at least 12 characters.</p>
+        )}
+        {error && (
+          <p role="alert" className="alert error">
+            {error}
+          </p>
+        )}
+        <Button disabled={busy}>
+          {busy ? "Please wait…" : register ? "Create account" : "Sign in"}
+        </Button>
+      </form>
+      <p className="auth-note">
+        {register ? "Already have an account?" : "New to Raxlet?"}{" "}
+        <Link
+          className="text-lime-400"
+          href={register ? "/login" : "/register"}
+        >
+          {register ? "Sign in" : "Create account"}
+        </Link>
+      </p>
+    </div>
+  );
 }

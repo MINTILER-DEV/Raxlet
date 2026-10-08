@@ -6,3 +6,6 @@ node_modules/
 coverage/
 *.tsbuildinfo
 .DS_Store
+public/monaco/
+playwright-report/
+test-results/

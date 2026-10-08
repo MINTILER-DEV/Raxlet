@@ -15,6 +15,13 @@
       "when": 1791477731818,
       "tag": "0001_redundant_cloak",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791478472676,
+      "tag": "0002_immutable_versions",
+      "breakpoints": true
     }
   ]
 }

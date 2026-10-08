@@ -1,2 +1,4 @@
 import { Registry } from "@/components/registry";
-export default function Page(){return <Registry mode="latest"/>;}
+export default function Page() {
+  return <Registry mode="latest" />;
+}
