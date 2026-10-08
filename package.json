@@ -14,7 +14,10 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "predev": "node scripts/build-launcher.mjs",
     "test:browser": "playwright test",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "build:packed": "node scripts/build-packed.mjs",
+    "pretest": "npm run build:packed",
+    "pretest:integration": "npm run build:packed"
   },
   "engines": {
     "node": ">=20.19"

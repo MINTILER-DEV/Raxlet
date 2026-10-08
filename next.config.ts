@@ -3,6 +3,9 @@ const config: NextConfig = {
   poweredByHeader: false,
   outputFileTracingRoot: process.cwd(),
   serverExternalPackages: ["pg"],
+  outputFileTracingIncludes: {
+    "/api/*": ["./public/packed-runtime.js", "./public/packed-runtime.min.js"],
+  },
   async headers() {
     return [
       {

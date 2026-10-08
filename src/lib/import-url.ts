@@ -33,6 +33,7 @@ export function isPublicAddress(address: string) {
   );
 }
 export async function importUrl(value: string) {
+  const deadline = AbortSignal.timeout(8000);
   const url = new URL(value);
   if (
     url.protocol !== "https:" ||
@@ -45,7 +46,16 @@ export async function importUrl(value: string) {
       "INVALID_URL",
       "Use a public HTTPS URL on port 443 without credentials.",
     );
-  const addresses = await lookup(url.hostname, { all: true });
+  const addresses = await Promise.race([
+    lookup(url.hostname, { all: true }),
+    new Promise<never>((_, reject) =>
+      deadline.addEventListener(
+        "abort",
+        () => reject(new Error("Import timed out.")),
+        { once: true },
+      ),
+    ),
+  ]);
   if (!addresses.length || addresses.some((a) => !isPublicAddress(a.address)))
     return fail(
       400,
@@ -58,6 +68,7 @@ export async function importUrl(value: string) {
     const req = https.get(
       url,
       {
+        signal: deadline,
         lookup: (_hostname, _options, callback) =>
           callback(null, resolved.address, resolved.family),
         timeout: 8000,
@@ -84,7 +95,20 @@ export async function importUrl(value: string) {
             res.destroy(new Error("Remote script exceeds 500KB."));
           else chunks.push(chunk);
         });
-        res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+        res.on("end", () => {
+          try {
+            const text = new TextDecoder("utf-8", { fatal: true }).decode(
+              Buffer.concat(chunks),
+            );
+            if (text.includes("\u0000"))
+              throw new Error(
+                "Binary resources are unsupported. Use UTF-8 text dependencies.",
+              );
+            resolve(text);
+          } catch (error) {
+            reject(error);
+          }
+        });
         res.on("error", reject);
       },
     );

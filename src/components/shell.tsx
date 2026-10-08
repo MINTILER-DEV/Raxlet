@@ -51,7 +51,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
         key={href}
         href={href}
         onClick={() => setMenu(false)}
-        className={`nav-link ${path === href ? "active" : ""}`}
+        className={`nav-link ${path === href || (href === "/dashboard/launcher" && path.startsWith(href + "/")) ? "active" : ""}`}
       >
         <Icon size={17} />
         {label}

@@ -1,6 +1,12 @@
 import http from "node:http";
 import { URL } from "node:url";
 const server = http.createServer((req, res) => {
+  if (req.url === "/packed-inline") {
+    res.setHeader(
+      "Content-Security-Policy",
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'none'",
+    );
+  }
   if (req.url === "/blocked") {
     res.setHeader(
       "Content-Security-Policy",

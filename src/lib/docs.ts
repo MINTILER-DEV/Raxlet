@@ -11,6 +11,43 @@ export const documents: Record<
     }[];
   }
 > = {
+  packed: {
+    title: "Packed Mode",
+    intro:
+      "A self-contained launcher and reviewed script snapshot in one bookmarklet, available offline after generation.",
+    sections: [
+      {
+        title: "Build a bookmarklet",
+        items: [
+          "Open Dashboard → Launcher → Packed Mode. Select installed or authored scripts, filter by category or collection, and review source and permissions.",
+          "Configure theme, position, compact layout, initial enabled state, descriptions, warnings, search, and launcher minification. Approve community scripts and listed external dependencies explicitly.",
+          "Generate, inspect the source and size report, then drag the bookmark link or copy its URL into a bookmark. The complete launcher and source are embedded; no Raxlet account link or download happens on the target page.",
+        ],
+      },
+      {
+        title: "Execute deliberately",
+        paragraphs: [
+          "Open a compatible HTTP(S) page, launch the bookmarklet, enable a matching script, click Run, and confirm. No automatic execution occurs. The Raxlet account origin is refused.",
+          "Packed scripts run with ordinary page privileges, without extension isolation. They can inspect page information and make their own requests. Shadow DOM isolates styles, not permissions. Account credentials and saved library settings are excluded; GM storage is in memory for the panel session.",
+        ],
+      },
+      {
+        title: "Dependencies and compatibility",
+        paragraphs: [
+          "Approved public HTTPS @require scripts and UTF-8 text @resource files are retrieved only during generation and embedded in order. Unsupported APIs, unsafe URLs, module dependencies, and binary resources are rejected. Text resource APIs and Cloud Mode's supported GM subset are available.",
+          "CSP can block the bookmarklet before it starts, inline styles, or selected script behavior. Trusted Types, browser restrictions, and cross-origin rules still apply. Packing cannot bypass these restrictions. Precise @run-at and extension-only APIs are unsupported.",
+          "Launcher minification preserves selected source verbatim. Compression is disabled because compressed text needs a separate execution loader. Practical bookmark and sync limits vary; large output gets a warning. Split large selections into collection bookmarks.",
+        ],
+      },
+      {
+        title: "Profiles and updates",
+        paragraphs: [
+          "Profiles save names, selections, versions, and settings in this browser for your account. They require fresh approval when loaded. Regeneration first shows latest versions and dependency URLs for review, keeps library installations unchanged, and reports changed sources/dependencies. Replace the saved bookmark manually; packed snapshots never update themselves.",
+          "Use /api/packed/scripts and /api/packed/build with the existing authenticated same-origin API policy. Read docs/packed.md in the repository for packaging, storage, size, dependency, and browser details.",
+        ],
+      },
+    ],
+  },
   "getting-started": {
     title: "Getting started",
     intro:

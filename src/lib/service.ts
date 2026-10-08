@@ -38,6 +38,7 @@ import {
 import { parseMetadata, analyzeCompatibility, matchesUrl } from "./userscript";
 import { validateSource } from "./source";
 import { importUrl } from "./import-url";
+import { packedRoute } from "./packed-service";
 const current = () => database();
 const audit = async (uid: string, action: string, resourceId?: string) => {
   await current()
@@ -190,6 +191,7 @@ export async function libraryFor(uid: string) {
 export async function route(req: Request, parts: string[]): Promise<Response> {
   const method = req.method;
   const [resource, identifier, action] = parts;
+  if (resource === "packed") return packedRoute(req, identifier);
   if (resource === "health" && method === "GET") {
     await current().execute(sql`select 1`);
     return ok({ status: "ok", database: "connected" });

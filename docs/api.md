@@ -40,3 +40,7 @@ await fetch(`/api/scripts/${scriptId}/versions`, {
 Only public `/api/registry/*` read responses allow wildcard CORS, without credentials. Script detail endpoints may serve private owner data and therefore do not offer cross-origin reads. Launchers use the approved popup bridge instead of third-party cookies or cross-origin bearer tokens.
 
 Authenticated read/mutation limits are 120/40 requests per minute per user. Anonymous callers on Vercel use its trusted forwarding header; elsewhere anonymous traffic shares a bucket. Better Auth login and registration limits are separate. HTTP 429 carries `Retry-After: 60`.
+
+# Packed Mode
+
+`GET /api/packed/scripts` lists authenticated installed and authored selections; `?latest=true` retrieves latest accessible versions for review. `POST /api/packed/build` generates a self-contained artifact after validating selection ownership, immutable version IDs, settings, community approval, and dependency approval. Existing Origin, JSON, session, suspension, and persistent rate-limit policies apply. See [Packed Mode](packed.md) for the request format and limits.

@@ -31,6 +31,7 @@ For local PostgreSQL use a connection string such as `postgresql://user:password
 - Source review, version histories, screenshot URLs, installed-user ratings, author follows, reports, and admin moderation.
 - Reusable bookmarklet and console snippet; vanilla draggable Shadow DOM panel; manual execution, matching, status, errors, and selected GM APIs.
 - Session-bound, exact-origin launcher approval with a revocable 15-minute bridge. Account credentials never reach the target page.
+- Packed Mode builder: self-contained offline bookmarklets, reviewed script selection, approved bundled dependencies, configurable vanilla launcher, exact size reporting, downloads/source preview, and local saved profiles. See [Packed Mode](docs/packed.md).
 - REST APIs, persistent rate limits, ownership checks, input validation, escaped source display, SSRF-resistant URL fetching, security headers, migrations, and health check.
 
 ## Commands
@@ -79,7 +80,7 @@ See [deployment](docs/deployment.md), [API](docs/api.md), and [security and comp
 
 Community code is untrusted and runs with ordinary target-page privileges. Shadow DOM is style isolation, not a sandbox. A target page can inspect source and settings explicitly shared with it. Do not link sensitive or untrusted pages. CSP, popup blocking, cross-origin isolation, and restricted browser pages can prevent launch or execution. The fallback is the Raxlet library for source review/edit/export, not a browser-security workaround.
 
-External `@require`, `@resource`, extension-only APIs, automatic execution, precise `@run-at`, and remote update/download URLs are unsupported. Updates are reviewed registry versions. Settings use JSON and a 16KB limit; concurrent tabs can overwrite each other’s values. Asynchronous callback failures after a script returns cannot all be attributed to that script. Compatibility analysis is advisory, not a malware scanner.
+Cloud Mode does not load external `@require` or `@resource`; Packed Mode can bundle explicitly approved classic JavaScript dependencies and UTF-8 text resources at generation time. Extension-only APIs, automatic execution, precise `@run-at`, and remote update/download services are unsupported. Updates are reviewed versions. Settings use JSON and a 16KB limit; Cloud Mode's concurrent tabs can overwrite each other’s values, and Packed Mode keeps values only in memory for the launcher session. Asynchronous callback failures after a script returns cannot all be attributed to that script. Compatibility analysis is advisory, not a malware scanner.
 
 Before exposing a deployment publicly, supply real Neon/Vercel configuration and run the checks above in your environment. No cloud account, production database, or deployed domain is provisioned by the repository itself.
 

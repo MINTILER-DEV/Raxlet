@@ -7,6 +7,7 @@ import { bookmarklet, launcherSnippet } from "@/lib/bookmarklet";
 import { api, mutation } from "@/lib/client";
 import { Button } from "./ui/button";
 import { useRemote, RequestState } from "./workspace";
+import { LauncherTabs } from "./launcher-tabs";
 export function LauncherPage() {
   const [origin, setOrigin] = useState("");
   const anchor = useRef<HTMLAnchorElement>(null);
@@ -29,6 +30,7 @@ export function LauncherPage() {
   };
   return (
     <>
+      <LauncherTabs />
       <div className="section-heading">
         <div>
           <div className="eyebrow">YOUR LIBRARY, ON THE PAGE</div>

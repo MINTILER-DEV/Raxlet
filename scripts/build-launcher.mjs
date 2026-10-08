@@ -1,5 +1,6 @@
 import { build } from "esbuild";
 import { mkdir, cp } from "node:fs/promises";
+import "./build-packed.mjs";
 await mkdir("public", { recursive: true });
 await build({
   entryPoints: ["src/launcher/index.ts"],

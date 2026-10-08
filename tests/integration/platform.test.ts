@@ -37,7 +37,7 @@ async function request(
   let res: Response;
   try {
     if (method !== "GET") assertMutationOrigin(req);
-    res = await route(req, path.split("/"));
+    res = await route(req, path.split("?")[0].split("/"));
   } catch (e) {
     res = errorResponse(e);
   }
@@ -165,6 +165,60 @@ describe("real PostgreSQL platform lifecycle", () => {
       (await request("scripts", "POST", { source: "bad" }, alice)).status,
     ).toBe(400);
   });
+  it("Packed Mode authenticates, checks ownership and immutable versions, and packages without execution", async () => {
+    expect((await request("packed/scripts")).status).toBe(401);
+    const candidates = (
+      await request("packed/scripts", "GET", undefined, alice)
+    ).json.data;
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].owned).toBe(true);
+    const input = {
+      selections: [
+        { id: candidates[0].id, versionId: candidates[0].versionId },
+      ],
+    };
+    expect((await request("packed/build", "POST", input)).status).toBe(401);
+    expect((await request("packed/build", "POST", input, bob)).status).toBe(
+      404,
+    );
+    expect(
+      (
+        await request("packed/build", "POST", input, alice, {
+          origin: "https://evil.test",
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await request(
+          "packed/build",
+          "POST",
+          {
+            ...input,
+            selections: [{ id: candidates[0].id, versionId: "stale" }],
+          },
+          alice,
+        )
+      ).status,
+    ).toBe(409);
+    expect(
+      (
+        await request(
+          "packed/build",
+          "POST",
+          { ...input, settings: { token: "untrusted" } },
+          alice,
+        )
+      ).status,
+    ).toBe(400);
+    const output = await request("packed/build", "POST", input, alice);
+    expect(output.status).toBe(200);
+    expect(output.json.data.manifest.scripts[0].hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(output.json.data.bookmarklet).toMatch(/^javascript:/);
+    expect(output.json.data.code).not.toContain(aliceSession);
+    expect(output.json.data.code).not.toContain(alice);
+    expect(output.json.data.manifest.scripts[0]).not.toHaveProperty("settings");
+  });
   it("rejects invalid syntax, empty entry patches, and unconfirmed/unsafe URL imports", async () => {
     expect(
       (
@@ -241,6 +295,26 @@ describe("real PostgreSQL platform lifecycle", () => {
     expect(
       (await request("library", "GET", undefined, bob)).json.data[0].enabled,
     ).toBe(false);
+    const candidates = (await request("packed/scripts", "GET", undefined, bob))
+      .json.data;
+    const input = {
+      selections: [
+        { id: candidates[0].id, versionId: candidates[0].versionId },
+      ],
+    };
+    expect((await request("packed/build", "POST", input, bob)).status).toBe(
+      400,
+    );
+    expect(
+      (
+        await request(
+          "packed/build",
+          "POST",
+          { ...input, communityApproved: true },
+          bob,
+        )
+      ).status,
+    ).toBe(200);
   });
   it("version checks reject stale edits and version reuse", async () => {
     const r = await request(
@@ -311,6 +385,31 @@ describe("real PostgreSQL platform lifecycle", () => {
       ).status,
     ).toBe(400);
     expect((await request(`scripts/${scriptId}`)).json.data.revision).toBe(3);
+  });
+  it("Packed regeneration reviews latest versions without changing the installed version", async () => {
+    const original = (await request("packed/scripts", "GET", undefined, bob))
+      .json.data[0];
+    const latest = (
+      await request("packed/scripts?latest=true", "GET", undefined, bob)
+    ).json.data[0];
+    expect(latest.versionId).not.toBe(original.versionId);
+    const output = await request(
+      "packed/build",
+      "POST",
+      {
+        selections: [{ id: latest.id, versionId: latest.versionId }],
+        latest: true,
+        communityApproved: true,
+      },
+      bob,
+    );
+    expect(output.status).toBe(200);
+    expect(output.json.data.manifest.scripts[0].versionId).toBe(
+      latest.versionId,
+    );
+    expect(
+      (await request("library", "GET", undefined, bob)).json.data[0].versionId,
+    ).toBe(original.versionId);
   });
   it("updates require review and disable the installed script", async () => {
     const s = (await request(`scripts/${scriptId}`)).json.data;
@@ -511,6 +610,9 @@ describe("real PostgreSQL platform lifecycle", () => {
     expect(
       (await request("library", "GET", undefined, bob)).json.data,
     ).toHaveLength(0);
+    expect(
+      (await request("packed/scripts", "GET", undefined, bob)).json.data,
+    ).toHaveLength(0);
     await request(
       `admin/scripts/${scriptId}`,
       "PATCH",
@@ -544,6 +646,21 @@ describe("real PostgreSQL platform lifecycle", () => {
     expect(
       (await request("users/me/scripts", "GET", undefined, alice)).json.data,
     ).toHaveLength(1);
+    const candidate = (await request("packed/scripts", "GET", undefined, alice))
+      .json.data[0];
+    expect(candidate.id).toBe("owned:" + scriptId);
+    expect(
+      (
+        await request(
+          "packed/build",
+          "POST",
+          {
+            selections: [{ id: candidate.id, versionId: candidate.versionId }],
+          },
+          alice,
+        )
+      ).status,
+    ).toBe(200);
   });
   it("rate limiting persists across requests", async () => {
     const req = new Request(base + "/api/library", { method: "POST" });

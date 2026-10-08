@@ -1,0 +1,58 @@
+# Packed Mode
+
+Open **Dashboard → Launcher → Packed Mode**, select installed or authored scripts, review source and warnings, configure the launcher, and generate a bookmarklet. Copy its `javascript:` URL into a bookmark or drag the provided link to the bookmarks bar. The dashboard prevents clicking that link from executing it on your account origin. Download JavaScript or use the read-only source preview to inspect the artifact.
+
+The generated bookmarklet includes a vanilla draggable panel, inline styles, the selected immutable script sources, complete metadata, URL matches and exclusions, supported GM utilities, and approved dependencies. It does not fetch a launcher, contact Raxlet, open authentication windows, or load a CDN. After generation you can disconnect and launch it on an already loaded compatible HTTP(S) page. The website and builder still require authentication and a database.
+
+## Execution and safety
+
+Scripts start only after **Enable → Run → Confirm & run**. Enabling scripts by default does not run them automatically. URL rules and enabled state are rechecked at execution, and Raxlet's canonical account origin is refused. Metadata uses text nodes, source review uses plain text, and no selected script or dependency executes during generation. Private scripts can only be selected by their owner; other scripts must belong to the caller's accessible installed library. Community scripts require explicit approval when included.
+
+Packed scripts execute as ordinary async functions with target-page privileges. This is neither an extension sandbox nor Tampermonkey's isolated userscript context. The target page can inspect your packed source, resources, and in-memory storage. Scripts can read the DOM, access page-accessible information, and make their own network requests. Offline availability applies to the launcher and embedded source, not to network requests inside arbitrary scripts. Compatibility analysis does not certify that a script is safe or works offline.
+
+Raxlet session cookies, account IDs, authorization tokens, and saved library GM settings are not copied into the artifact. Source and metadata you choose to include can contain secrets of their own; review them before sharing a bookmarklet. Each launch starts independent empty JSON GM storage, retained in memory across runs for that panel. Closing/reopening or reloading resets it. Packed values do not sync to Cloud Mode. Closing the panel or disabling a script cannot undo script effects or stop callbacks already scheduled.
+
+The supported Cloud Mode APIs (`GM_info`, styles, JSON get/set/delete/list values, and modern `GM.*` counterparts) are shared with Packed Mode. Packed Mode additionally supports declared `GM_getResourceText`, `GM_getResourceURL`, `GM.getResourceText`, and `GM.getResourceUrl`. Resource URLs are embedded `data:text/plain` URLs, not remotely loaded files. JSON storage uses a 16KB limit and keys of at most 100 characters. Unsupported grants/APIs and `unsafeWindow` block generation. Automatic execution, precise `@run-at`, cross-origin privileged requests, extension APIs, binary resources, and remote update/download services are unsupported. Run-at and update directives remain in the manifest but do not schedule execution or downloads.
+
+Success means the script function and pending GM writes completed. Later timers, event callbacks, and unawaited requests can still fail; Raxlet cannot attribute every later page error to a script. Script code retains the existing Raxlet strict async execution semantics.
+
+## Dependencies
+
+External dependency URLs are listed for review and require explicit approval before retrieval. `@require` classic JavaScript is embedded in directive order before the main script in the same function scope. ES modules, malformed JavaScript, incompatible APIs, duplicate resource names, and unsafe URLs cause errors; required files are never silently dropped. Dependencies must work in the same strict async function scope as the script; scripts expecting extension-style globals or file boundaries may need adaptation. UTF-8 text `@resource name https://...` files are embedded as data. Binary images/fonts are unsupported.
+
+Retrieval reuses the HTTPS importer with DNS-pinned public-address checks, TLS verification, no credentials or redirects, an eight-second absolute deadline, UTF-8 validation, and a 500KB per-file limit. No account cookie is sent. At most eight distinct URLs are fetched per build. Every embedded dependency has a SHA-256 hash in the manifest. URLs are mutable external inputs: reproducibility requires identical dependency contents, and regeneration re-fetches them.
+
+## Determinism, size, and compression
+
+Inputs are sorted by selection ID, object keys are serialized stably, metadata array order and script source remain intact, and the executable artifact contains no timestamp. Identical selected versions, source/dependency bytes, settings, canonical origin, and launcher build produce identical bookmarklets. The response's generation timestamp sits outside the artifact. Source and artifact SHA-256 hashes support comparison; they are not signatures or a sandbox.
+
+Esbuild bundles/minifies only trusted launcher code at development/build time. User source and `@require` source are preserved verbatim inside directly executable functions, then the entire program is URL encoded. There is no `eval`, `new Function`, decompression loader, or dynamic script element used by Packed Mode. Size reporting measures both UTF-8 JavaScript and the final ASCII percent-encoded URL, including encoding overhead. Script contributions include their wrapper and bundled dependency/resource bytes; manifest and launcher overhead are additional.
+
+The output compares unminified and minified percent-encoded sizes and a gzip/base64 lower bound. Gzip produces data, not executable code; the lower bound excludes decompressor and loader overhead. Lightweight string compression has the same execution problem and additional decoder cost. Compression is deliberately disabled: decoding source would require another execution mechanism with CSP/Trusted Types limitations. The direct minified program is the supported artifact.
+
+Up to 30 scripts, 1MB selected source, 1MB distinct dependencies, a 4MB encoded bookmarklet limit, and a 4MB total JSON response limit are enforced. A warning appears above 64,000 URL characters as a conservative usability heuristic, **not a verified browser limit**. Browser, operating system, and bookmark-sync limits vary. Save and launch your bookmark on the intended browsers. Minify the launcher, remove large scripts, or generate separate collection bookmarklets to reduce size.
+
+## Browser limitations
+
+Packing removes Raxlet network dependencies but cannot bypass browser security. CSP may block `javascript:` navigation, inline styling, styles added by scripts, or actions inside scripts. If the browser blocks the bookmarklet before it starts, the launcher cannot display an error; inspect browser console messages. Trusted Types can restrict DOM sinks used by selected scripts. Browser-internal pages, extension pages, file URLs, and restricted stores may prohibit bookmarklets. Normal same-origin and cross-origin restrictions still apply.
+
+Shadow DOM provides style isolation when available; the fallback prefixes CSS selectors to the launcher host, but page styles may still interfere. It provides no security isolation. Controls support keyboard focus, Escape to close, header arrow keys to move, pointer dragging, search, minimization, and small screens. The launcher requires a modern browser with async functions, URL, Proxy, and standard DOM APIs. No universal-browser compatibility claim is made.
+
+## Profiles and regeneration
+
+Named profiles save selections, versions, and settings in this browser under the signed-in account's ID. They do not sync between devices and contain no source or credentials. Loading a profile requires fresh approval and reports missing or changed versions. Collection filtering supports separate bookmarks for different workflows.
+
+Ordinary generation uses installed versions and current authored versions. **Regenerate with latest versions** first retrieves the latest source/dependencies for review, then uses those immutable versions without changing library installations. If a version changes before generation, the API rejects the stale selection. Output shows source/dependency changes compared to the previous build. Replace your saved bookmark manually after reviewing the new artifact; an offline snapshot never updates itself.
+
+## API
+
+Authenticated same-origin endpoints:
+
+- `GET /api/packed/scripts`: accessible installed and authored candidates, immutable version IDs, source, metadata, estimates, and compatibility.
+- `GET /api/packed/scripts?latest=true`: latest accessible versions for review before regeneration.
+- `GET /api/packed/runtime-size`: encoded minified/unminified launcher sizes for the builder's approximate total-size estimate. Dependency sizes remain unknown until fetched.
+- `POST /api/packed/build`: `{name, selections: [{id, versionId}], settings, communityApproved, dependenciesApproved, latest}`. Returns source, URL, manifest, hashes, sizes, warnings, and a generation timestamp. IDs reference the user's library entry or owned script, never arbitrary source uploads or another user's private records.
+
+The existing origin/JSON policy, persistent API rate limits, session and suspension checks apply. No database migration is required for Packed Mode. Runtime assets are bundled during predev/build; Next.js explicitly traces both packed runtime files into Vercel functions. Unit/integration tests generate these assets through their npm pretest hooks.
+
+References: [esbuild API](https://esbuild.github.io/api/), [MDN javascript URLs](https://developer.mozilla.org/en-US/docs/Web/URI/Reference/Schemes/javascript), [MDN CSP](https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/CSP).
