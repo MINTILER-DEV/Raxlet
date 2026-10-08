@@ -9,3 +9,4 @@ coverage/
 public/monaco/
 playwright-report/
 test-results/
+.vercel
