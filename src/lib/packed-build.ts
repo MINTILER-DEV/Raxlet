@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { parse } from "acorn";
 import { transform } from "esbuild";
+import { minify as terserMinify } from "terser";
 import { z } from "zod";
 import {
   packedDefaults,
@@ -29,9 +30,14 @@ export const packedSettingsSchema = z
     search: z.boolean().default(true),
     minify: z.boolean().default(true),
     minifyScripts: z.boolean().default(false),
+    terser: z.enum(["off", "always", "auto"]).default("off"),
     compression: z.boolean().default(false),
   })
-  .strict();
+  .strict()
+  .refine((settings) => settings.terser === "off" || settings.minifyScripts, {
+    message: "Enable experimental JavaScript minification before using Terser.",
+    path: ["terser"],
+  });
 export const packedRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(80).default("Raxlet Packed"),
@@ -228,6 +234,7 @@ export async function buildPacked(
       enabled: input.settings.initiallyEnabled,
       hash: packedHash(c.source),
       minified: packedRunner !== runner,
+      terser: false,
       packedHash: packedHash(packedRunner),
       originalBytes: bytes(runner),
       bytes:
@@ -252,38 +259,138 @@ export async function buildPacked(
       ),
     });
   }
-  const manifest: PackedManifest = {
+  let manifest: PackedManifest = {
     format: 1,
     name: input.name,
     origin: new URL(origin).origin,
     settings: input.settings,
     scripts,
   };
-  const [raw, minified] = await Promise.all(
-    ["packed-runtime.js", "packed-runtime.min.js"].map((name) =>
-      readFile(join(process.cwd(), "public", name), "utf8"),
+  const [raw, minified, loader] = await Promise.all(
+    ["packed-runtime.js", "packed-runtime.min.js", "packed-compressed.js"].map(
+      (name) => readFile(join(process.cwd(), "public", name), "utf8"),
     ),
   );
-  const assemble = (runtime: string) =>
-    `void (()=>{\n${runtime}\nRaxletPacked.start(JSON.parse(${JSON.stringify(stableJson(manifest))}),[${runners.join(",\n")}]);\n})();`;
-  const rawCode = assemble(raw),
-    minCode = assemble(minified);
-  const code = input.settings.minify ? minCode : rawCode;
-  const payload = gzipSync(code, { level: 9 }).toString("base64url");
-  const loader = await readFile(
-    join(process.cwd(), "public", "packed-compressed.js"),
-    "utf8",
-  );
-  const compressedCode = `void (()=>{\n${loader}\nvoid RaxletCompressed.start(${JSON.stringify(manifest.origin)},${JSON.stringify(payload)},${bytes(code)});\n})();`;
+  const artifact = (
+    includedRunners: string[],
+    includedManifest: PackedManifest,
+  ) => {
+    const assemble = (runtime: string) =>
+      `void (()=>{\n${runtime}\nRaxletPacked.start(JSON.parse(${JSON.stringify(stableJson(includedManifest))}),[${includedRunners.join(",\n")}]);\n})();`;
+    const rawCode = assemble(raw),
+      minCode = assemble(minified);
+    const code = input.settings.minify ? minCode : rawCode;
+    const payload = gzipSync(code, { level: 9 }).toString("base64url");
+    const compressedCode = `void (()=>{\n${loader}\nvoid RaxletCompressed.start(${JSON.stringify(includedManifest.origin)},${JSON.stringify(payload)},${bytes(code)});\n})();`;
+    return {
+      rawCode,
+      minCode,
+      code,
+      payload,
+      ...selectPackedEncoding(code, compressedCode, input.settings.compression),
+    };
+  };
+  let result = artifact(runners, manifest);
+  const before = result.bookmarklet.length;
+  const attempted =
+    input.settings.terser === "always" ||
+    (input.settings.terser === "auto" && before > 64000);
+  let terserScripts = 0;
+  if (attempted) {
+    const optimizedRunners: string[] = [];
+    const optimizedScripts: PackedManifest["scripts"] = [];
+    for (let index = 0; index < runners.length; index++) {
+      const runner = runners[index];
+      const legalComments = new Set<string>();
+      parse("(" + runner + ")", {
+        ecmaVersion: "latest",
+        sourceType: "script",
+        onComment: (_block, text, start, end) => {
+          if (/^!|@license|@copyright|@preserve/i.test(text))
+            legalComments.add(("(" + runner + ")").slice(start, end));
+        },
+      });
+      // Preserve the expression's result. Only parse/transform source on the server.
+      const optimized = await terserMinify(
+        `const __raxletTerserRunner=[(${runner})];`,
+        {
+          ecma: 2022,
+          module: false,
+          keep_fnames: true,
+          keep_classnames: true,
+          compress: {
+            passes: 2,
+            unsafe: false,
+            pure_getters: false,
+            // Do not trust PURE annotations or discard debugging statements.
+            side_effects: false,
+            drop_debugger: false,
+            keep_fargs: true,
+          },
+          mangle: { eval: false, properties: false },
+          // Preserve licenses even when the declaration carrying them is removed.
+          format: { comments: false, preamble: [...legalComments].join("\n") },
+        },
+      );
+      if (!optimized.code) throw new Error("Terser returned no runner code.");
+      const expression = `(()=>{${optimized.code}\nreturn __raxletTerserRunner[0]})()`;
+      parse("(" + expression + ")", {
+        ecmaVersion: "latest",
+        sourceType: "script",
+      });
+      const smaller =
+        encodeBookmarklet(expression).length < encodeBookmarklet(runner).length;
+      const selected = smaller ? expression : runner;
+      optimizedRunners.push(selected);
+      optimizedScripts.push({
+        ...scripts[index],
+        minified: scripts[index].minified || smaller,
+        terser: smaller,
+        packedHash: packedHash(selected),
+        bytes: scripts[index].bytes + bytes(selected) - bytes(runner),
+      });
+    }
+    const optimizedManifest = { ...manifest, scripts: optimizedScripts };
+    const optimizedArtifact = artifact(optimizedRunners, optimizedManifest);
+    // Compare complete URLs, including metadata, encoding, and optional gzip loader.
+    if (optimizedArtifact.bookmarklet.length < before) {
+      result = optimizedArtifact;
+      manifest = optimizedManifest;
+      scriptsPacked = optimizedRunners.reduce(
+        (sum, runner) => sum + bytes(runner),
+        0,
+      );
+      terserScripts = optimizedScripts.filter((script) => script.terser).length;
+    }
+  }
+  const terser = {
+    attempted,
+    applied: terserScripts > 0,
+    scripts: terserScripts,
+    before,
+    after: result.bookmarklet.length,
+    note:
+      input.settings.terser === "off"
+        ? "Terser is disabled."
+        : !attempted
+          ? "Automatic Terser was skipped: the full bookmarklet is within 64,000 characters after esbuild and optional gzip."
+          : terserScripts
+            ? "Terser reduced the complete bookmarklet URL after esbuild. Original script versions are unchanged."
+            : "Terser was tried but did not reduce the complete bookmarklet URL; the previous artifact was retained.",
+  };
   const {
+    rawCode,
+    minCode,
+    code,
+    payload,
     directBookmarklet,
     compressedBookmarklet,
     compressionApplied,
     bookmarkletCode,
     bookmarklet,
-  } = selectPackedEncoding(code, compressedCode, input.settings.compression);
+  } = result;
   const warnings: string[] = [];
-  const minifiedScripts = scripts.filter((s) => s.minified).length;
+  const minifiedScripts = manifest.scripts.filter((s) => s.minified).length;
   if (input.settings.minifyScripts) {
     warnings.push(
       "Experimental esbuild minification changes userscript and @require source. Function/class names and legal comments are retained, but source inspection and optimization-sensitive behavior may differ. Test on a target page; original versions remain unchanged.",
@@ -316,6 +423,7 @@ export async function buildPacked(
     bookmarkletHash: packedHash(bookmarkletCode),
     compressionApplied,
     minifiedScripts,
+    terser,
     bookmarklet,
     manifest,
     hash: packedHash(code),

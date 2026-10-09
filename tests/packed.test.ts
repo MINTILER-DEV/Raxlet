@@ -87,6 +87,123 @@ function capture(output: PackedOutput) {
   return captured!;
 }
 describe("Packed Mode generation", () => {
+  it("runs Terser after esbuild, retaining behavior, names, license, metadata and immutable source hashes", async () => {
+    const dependency = `/*! dependency license */
+      const prefix = 'café 🚀';
+      /*! unused dependency license */
+      function unusedLicensedFunction() { return 'unused'; }
+      function namedDependency(value) { return prefix + value; }
+      class NamedDependency { static result() { return NamedDependency.name; } }
+      globalThis.dependencyExecuted = true;`;
+    const code =
+      source.replace(
+        "// @grant none",
+        "// @grant none\n// @require https://example.com/dependency.js",
+      ) +
+      `
+      ${Array.from({ length: 100 }, (_, i) => `const unused${i} = 'removable value ${i}';`).join("\n")}
+      function originalFunctionName(value) { return namedDependency(value); }
+      /* @__PURE__ */ originalFunctionName(globalThis.sideEffect = ' executed');
+      globalThis.minifiedResult = [originalFunctionName.name, NamedDependency.result(), originalFunctionName(' 日本語')];`;
+    const settings = {
+      ...packedDefaults,
+      minifyScripts: true,
+      terser: "always",
+    };
+    const output = await build(
+      [candidate(code)],
+      { settings, dependenciesApproved: true },
+      async () => dependency,
+    );
+    const again = await build(
+      [candidate(code)],
+      { settings, dependenciesApproved: true },
+      async () => dependency,
+    );
+    expect(output.bookmarklet).toBe(again.bookmarklet);
+    expect(output.terser.attempted).toBe(true);
+    expect(output.terser.applied).toBe(true);
+    expect(output.terser.after).toBeLessThan(output.terser.before);
+    expect(output.terser.after).toBe(output.characters);
+    expect(output.manifest.scripts[0].terser).toBe(true);
+    expect(output.manifest.scripts[0].hash).toBe(packedHash(code));
+    expect(output.manifest.scripts[0].dependencies[0].hash).toBe(
+      packedHash(dependency),
+    );
+    expect(output.code).toContain("/*! dependency license */");
+    expect(output.code).toContain("/*! unused dependency license */");
+    expect(output.manifest.scripts[0].metaStr).toContain("// @custom two");
+    const { runners, sandbox } = capture(output);
+    expect(sandbox).not.toHaveProperty("dependencyExecuted");
+    await runners[0]();
+    expect(sandbox.sideEffect).toBe(" executed");
+    expect(sandbox.minifiedResult).toEqual([
+      "originalFunctionName",
+      "NamedDependency",
+      "café 🚀 日本語",
+    ]);
+  });
+  it("automatically tries Terser above the full URL target, and skips when gzip already brings it below", async () => {
+    const code =
+      source +
+      "\n" +
+      Array.from(
+        { length: 1600 },
+        (_, i) => `const unused${i} = '${"removable ".repeat(8)}${i}';`,
+      ).join("\n");
+    const settings = { ...packedDefaults, minifyScripts: true, terser: "auto" };
+    const output = await build([candidate(code)], { settings });
+    expect(output.terser.before).toBeGreaterThan(64000);
+    expect(output.terser.attempted).toBe(true);
+    expect(output.terser.applied).toBe(true);
+    expect(output.characters).toBeLessThan(64000);
+    const compressed = await build([candidate(code)], {
+      settings: { ...settings, compression: true },
+    });
+    expect(compressed.sizes.direct).toBeGreaterThan(64000);
+    expect(compressed.terser.before).toBeLessThan(64000);
+    expect(compressed.terser.attempted).toBe(false);
+    expect(compressed.terser.applied).toBe(false);
+    expect(compressed.compressionApplied).toBe(true);
+  });
+  it("uses a strict 64,000-character threshold and keeps the earlier artifact when Terser is larger", async () => {
+    const code = source.replace(
+      "// @grant none",
+      "// @grant none\n// @resource text https://example.com/text",
+    );
+    const options = {
+      settings: { ...packedDefaults, minifyScripts: true, terser: "auto" },
+      dependenciesApproved: true,
+    };
+    const baseline = await build([candidate(code)], options, async () => "");
+    expect(baseline.terser.attempted).toBe(false);
+    let padding = 64000 - baseline.characters;
+    const probe = await build([candidate(code)], options, async () =>
+      "x".repeat(padding),
+    );
+    // Account for digit-width changes in recorded dependency/contribution sizes.
+    padding -= probe.terser.before - 64000;
+    const exact = await build([candidate(code)], options, async () =>
+      "x".repeat(padding),
+    );
+    expect(exact.characters).toBe(64000);
+    expect(exact.terser.attempted).toBe(false);
+    const over = await build([candidate(code)], options, async () =>
+      "x".repeat(padding + 1),
+    );
+    expect(over.terser.before).toBe(64001);
+    expect(over.terser.attempted).toBe(true);
+    expect(over.terser.applied).toBe(false);
+    expect(over.characters).toBe(over.terser.before);
+    expect(over.terser.note).toContain("previous artifact");
+    expect(over.warnings.join(" ")).toContain("64,000");
+    expect(
+      packedRequestSchema.safeParse({
+        selections: [{ id: "a", versionId: "a-v1" }],
+        settings: { terser: "always" },
+      }).success,
+    ).toBe(false);
+  });
   it("minifies scripts and dependencies without running them, retaining names, licenses, metadata and original hashes", async () => {
     const dependency = `/*! dependency license */
       const dependencyPrefix = 'café 🚀';

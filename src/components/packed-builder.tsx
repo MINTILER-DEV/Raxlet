@@ -441,12 +441,48 @@ export function PackedBuilder() {
                   type="checkbox"
                   checked={settings[key]}
                   onChange={(e) =>
-                    setSettings({ ...settings, [key]: e.target.checked })
+                    setSettings({
+                      ...settings,
+                      [key]: e.target.checked,
+                      ...(key === "minifyScripts" && !e.target.checked
+                        ? { terser: "off" as const }
+                        : {}),
+                    })
                   }
                 />
                 <span className="min-w-0 flex-1">{label}</span>
               </label>
             ))}
+            <label className="form-stack">
+              <span>Experimental Terser second pass</span>
+              <select
+                value={settings.terser}
+                onChange={(event) => {
+                  const terser = event.target.value as PackedSettings["terser"];
+                  setSettings({
+                    ...settings,
+                    terser,
+                    minifyScripts: terser !== "off" || settings.minifyScripts,
+                  });
+                }}
+              >
+                <option value="off">Off</option>
+                <option value="always">Always try after esbuild</option>
+                <option value="auto">
+                  Automatic when bookmarklet exceeds 64,000 characters
+                </option>
+              </select>
+            </label>
+            {settings.terser !== "off" && (
+              <p className="alert text-xs">
+                Enables esbuild first, then tries additional Terser
+                optimization. Automatic mode checks the full encoded URL after
+                esbuild and optional gzip. The previous artifact is kept unless
+                the entire bookmarklet becomes smaller. Further optimization may
+                affect script behavior; test the result. Getting below 64,000
+                characters is not guaranteed.
+              </p>
+            )}
             {settings.minifyScripts && (
               <p className="alert text-xs">
                 Minifies selected userscripts and approved @require
@@ -678,12 +714,19 @@ export function PackedBuilder() {
           <p className="muted text-sm">{output.compatibility}</p>
           {output.manifest.settings.minifyScripts && (
             <p className="muted text-sm">
-              Esbuild minified {output.minifiedScripts} of{" "}
+              JavaScript minification applied to {output.minifiedScripts} of{" "}
               {output.manifest.scripts.length} scripts. Script runners:{" "}
               {size(output.sizes.scriptsOriginal)}
               {" → "}
               {size(output.sizes.scriptsPacked)} before URL encoding, excluding
               metadata, resources, and launcher overhead.
+            </p>
+          )}
+          {output.manifest.settings.terser !== "off" && (
+            <p className="muted text-sm">
+              Terser: {output.terser.note}{" "}
+              {output.terser.attempted &&
+                `${output.terser.before.toLocaleString()} → ${output.terser.after.toLocaleString()} URL characters; ${output.terser.scripts} script(s) optimized.`}
             </p>
           )}
           {output.compressionApplied && (

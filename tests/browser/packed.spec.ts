@@ -22,6 +22,7 @@ async function artifact(
   dependencies = false,
   compression = false,
   minifyScripts = false,
+  terser: "off" | "always" | "auto" = "off",
 ) {
   const metadata = parseMetadata(code);
   return buildPacked(
@@ -45,7 +46,7 @@ async function artifact(
     packedRequestSchema.parse({
       selections: [{ id: "fixture", versionId: "fixture-1" }],
       dependenciesApproved: dependencies,
-      settings: { compression, minifyScripts },
+      settings: { compression, minifyScripts, terser },
     }),
     base,
     async () => "offline resource",
@@ -86,12 +87,24 @@ test("builder selects scripts, saves profiles, previews/downloads output, and ex
   await page.getByRole("button", { name: "Select all shown" }).click();
   await expect(page.getByText(/1 selected/)).toBeVisible();
   await page.getByLabel("Build profile name").fill("Offline tools");
+  await page
+    .getByLabel("Experimental Terser second pass")
+    .selectOption("always");
+  await expect(
+    page.getByLabel("Experimental JavaScript minification (esbuild)", {
+      exact: true,
+    }),
+  ).toBeChecked();
   await page.getByRole("button", { name: "Save profile" }).click();
+  await page.getByLabel("Experimental Terser second pass").selectOption("off");
   await page.getByRole("button", { name: "Deselect all" }).click();
   await expect(
     page.getByRole("button", { name: "Generate bookmarklet" }),
   ).toBeDisabled();
   await page.getByRole("button", { name: "Load profile" }).click();
+  await expect(page.getByLabel("Experimental Terser second pass")).toHaveValue(
+    "always",
+  );
   await page
     .getByLabel("Experimental JavaScript minification (esbuild)", {
       exact: true,
@@ -102,7 +115,12 @@ test("builder selects scripts, saves profiles, previews/downloads output, and ex
     .check();
   await page.getByRole("button", { name: "Generate bookmarklet" }).click();
   await expect(page.getByLabel("Generated bookmarklet URL")).toBeAttached();
-  await expect(page.getByText(/Esbuild minified 1 of 1 scripts/)).toBeVisible();
+  await expect(
+    page.getByText(/JavaScript minification applied to 1 of 1 scripts/),
+  ).toBeVisible();
+  await expect(
+    page.getByText(/Terser: Terser was tried|Terser: Terser reduced/),
+  ).toBeVisible();
   const url = await page.getByLabel("Generated bookmarklet URL").inputValue();
   expect(
     (await page.getByLabel("Standard bookmarklet URL").inputValue()).length,
@@ -248,7 +266,7 @@ test("direct packed functions work without unsafe-eval, text resources are embed
   await expect(panel).toHaveCount(0);
   await context.setOffline(false);
 });
-test("esbuild minified scripts run offline without unsafe-eval and preserve names and GM metadata", async ({
+test("esbuild and Terser scripts run offline without unsafe-eval and preserve names and GM metadata", async ({
   page,
   context,
 }) => {
@@ -258,11 +276,13 @@ test("esbuild minified scripts run offline without unsafe-eval and preserve name
       "@grant GM_info\n// @grant GM.getValue",
     ) +
     `
+    ${Array.from({ length: 100 }, (_, i) => `const unused${i} = '${i} removable';`).join("\n")}
     ${"// removable padding\n".repeat(100)}
     function originalFunctionName() { return originalFunctionName.name; }
     document.querySelector('#result').textContent += ' ' + originalFunctionName() + ' ' + GM_info.scriptMetaStr.includes('// @grant GM_info');
   `;
-  const output = await artifact(code, false, false, true);
+  const output = await artifact(code, false, false, true, "always");
+  expect(output.terser.applied).toBe(true);
   expect(output.minifiedScripts).toBe(1);
   expect(output.compressionApplied).toBe(false);
   await page.goto("http://127.0.0.1:4311/packed-inline");

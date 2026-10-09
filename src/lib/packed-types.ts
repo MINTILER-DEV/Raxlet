@@ -9,6 +9,7 @@ export type PackedSettings = {
   search: boolean;
   minify: boolean;
   minifyScripts: boolean;
+  terser: "off" | "always" | "auto";
   compression: boolean;
 };
 export const packedDefaults: PackedSettings = {
@@ -21,6 +22,7 @@ export const packedDefaults: PackedSettings = {
   search: true,
   minify: true,
   minifyScripts: false,
+  terser: "off",
   compression: false,
 };
 export type PackedCandidate = {
@@ -49,6 +51,7 @@ export type PackedScript = {
   enabled: boolean;
   hash: string;
   minified: boolean;
+  terser: boolean;
   packedHash: string;
   originalBytes: number;
   bytes: number;
@@ -71,6 +74,14 @@ export type PackedOutput = {
   bookmarkletHash: string;
   compressionApplied: boolean;
   minifiedScripts: number;
+  terser: {
+    attempted: boolean;
+    applied: boolean;
+    scripts: number;
+    before: number;
+    after: number;
+    note: string;
+  };
   bookmarklet: string;
   manifest: PackedManifest;
   hash: string;
