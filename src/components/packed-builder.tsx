@@ -6,6 +6,7 @@ import { loader } from "@monaco-editor/react";
 import { Archive, Copy, Download, Search } from "lucide-react";
 import { toast } from "sonner";
 import { api, authClient, mutation } from "@/lib/client";
+import { encodeBookmarklet } from "@/lib/packed-codec";
 import {
   packedDefaults,
   type PackedCandidate,
@@ -60,6 +61,7 @@ export function PackedBuilder() {
   const [output, setOutput] = useState<PackedOutput | null>(null);
   const [builtSignature, setBuiltSignature] = useState("");
   const [preview, setPreview] = useState(false);
+  const [previewLoader, setPreviewLoader] = useState(false);
   const [review, setReview] = useState<PackedCandidate | null>(null);
   const [confirmLatest, setConfirmLatest] = useState(false);
   const [latestSelection, setLatestSelection] = useState<PackedCandidate[]>([]);
@@ -426,6 +428,7 @@ export function PackedBuilder() {
                 ["warnings", "Display compatibility warnings"],
                 ["search", "Include search bar"],
                 ["minify", "Minify launcher code (preserve userscript source)"],
+                ["compression", "Experimental compressed bookmarklet"],
               ] as const
             ).map(([key, label]) => (
               <label className="row" key={key}>
@@ -440,6 +443,14 @@ export function PackedBuilder() {
                 <span className="min-w-0 flex-1">{label}</span>
               </label>
             ))}
+            {settings.compression && (
+              <p className="alert text-xs">
+                Compresses the entire launcher and original scripts losslessly
+                with gzip. Requires native browser decompression and dynamic
+                execution, which CSP or Trusted Types may block. Only used if
+                the complete bookmarklet URL is smaller.
+              </p>
+            )}
           </section>
           <section className="card form-stack">
             <h2>3. Review and build</h2>
@@ -451,6 +462,8 @@ export function PackedBuilder() {
               including launcher, metadata, and URL encoding. External
               dependency sizes are additional and unknown until retrieved. Exact
               size is shown after generation. Up to 30 scripts per build.
+              {settings.compression &&
+                " This estimate is before experimental compression; the final result includes loader overhead."}
             </p>
             <p className="muted text-xs">
               Account credentials and saved GM settings are excluded. Each
@@ -610,6 +623,13 @@ export function PackedBuilder() {
           <div className="row between">
             <h2>4. {output.name}</h2>
             <span className="badge green">Offline snapshot</span>
+            <span
+              className={`badge ${output.characters <= 64000 ? "green" : ""}`}
+            >
+              {output.characters <= 64000
+                ? "Within 64,000-character target"
+                : "Above 64,000-character target"}
+            </span>
           </div>
           {signature !== builtSignature && (
             <p className="alert">
@@ -640,6 +660,15 @@ export function PackedBuilder() {
             {output.compression}
           </p>
           <p className="muted text-sm">{output.compatibility}</p>
+          {output.compressionApplied && (
+            <p className="alert">
+              Compressed from {size(output.sizes.direct)} to{" "}
+              {size(output.bytes)} including the loader (
+              {Math.round((1 - output.bytes / output.sizes.direct) * 100)}%
+              smaller). Source preview and JavaScript download contain the
+              decompressed program for inspection.
+            </p>
+          )}
           {output.warnings.map((w) => (
             <p className="alert" key={w}>
               {w}
@@ -675,6 +704,25 @@ export function PackedBuilder() {
               <Copy size={15} />
               Copy bookmarklet
             </Button>
+            {output.compressionApplied && (
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(
+                      encodeBookmarklet(output.code),
+                    );
+                    toast.success("Standard bookmarklet copied");
+                  } catch {
+                    toast.error(
+                      "Clipboard unavailable. Copy the standard URL below.",
+                    );
+                  }
+                }}
+              >
+                Copy standard fallback
+              </Button>
+            )}
             <Button
               variant="outline"
               onClick={() => {
@@ -736,20 +784,46 @@ export function PackedBuilder() {
               value={output.bookmarklet}
             />
           </details>
+          {output.compressionApplied && (
+            <details>
+              <summary className="muted text-xs">
+                Standard bookmarklet fallback (larger, no decompression)
+              </summary>
+              <textarea
+                className="mono !min-h-32 mt-2"
+                aria-label="Standard bookmarklet URL"
+                readOnly
+                value={encodeBookmarklet(output.code)}
+              />
+            </details>
+          )}
           {preview && (
-            <Monaco
-              height="400px"
-              language="javascript"
-              theme="vs-dark"
-              value={output.code}
-              options={{
-                readOnly: true,
-                domReadOnly: true,
-                minimap: { enabled: false },
-                wordWrap: "on",
-                automaticLayout: true,
-              }}
-            />
+            <>
+              {output.compressionApplied && (
+                <label className="row">
+                  <input
+                    className="!w-auto"
+                    type="checkbox"
+                    checked={previewLoader}
+                    onChange={(e) => setPreviewLoader(e.target.checked)}
+                  />
+                  Inspect compressed loader instead of decompressed source
+                </label>
+              )}
+              <Monaco
+                height="400px"
+                language="javascript"
+                theme="vs-dark"
+                value={previewLoader ? output.bookmarkletCode : output.code}
+                options={{
+                  readOnly: true,
+                  domReadOnly: true,
+                  minimap: { enabled: false },
+                  wordWrap: "on",
+                  automaticLayout: true,
+                }}
+              />
+            </>
           )}
           <div className="table-wrap">
             <table>
@@ -789,8 +863,11 @@ export function PackedBuilder() {
             </summary>
             <p className="muted text-sm mt-3">
               Unminified, URL encoded: {size(output.sizes.unminified)}. Minified
-              launcher, URL encoded: {size(output.sizes.minified)}. Gzip/base64
-              lower bound: {size(output.sizes.gzipBase64)}.
+              launcher, URL encoded: {size(output.sizes.minified)}.
+              Gzip/base64url payload alone: {size(output.sizes.gzipBase64)}.
+              Complete compressed URL including loader:{" "}
+              {size(output.sizes.compressed)}. Standard URL for these settings:{" "}
+              {size(output.sizes.direct)}.
             </p>
             <p className="muted text-xs mt-2">{output.sizes.compressionNote}</p>
             <p className="muted text-xs mt-2">

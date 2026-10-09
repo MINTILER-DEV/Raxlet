@@ -8,6 +8,7 @@ export type PackedSettings = {
   warnings: boolean;
   search: boolean;
   minify: boolean;
+  compression: boolean;
 };
 export const packedDefaults: PackedSettings = {
   theme: "dark",
@@ -18,6 +19,7 @@ export const packedDefaults: PackedSettings = {
   warnings: true,
   search: true,
   minify: true,
+  compression: false,
 };
 export type PackedCandidate = {
   id: string;
@@ -60,6 +62,9 @@ export type PackedManifest = {
 export type PackedOutput = {
   name: string;
   code: string;
+  bookmarkletCode: string;
+  bookmarkletHash: string;
+  compressionApplied: boolean;
   bookmarklet: string;
   manifest: PackedManifest;
   hash: string;
@@ -73,6 +78,8 @@ export type PackedOutput = {
     unminified: number;
     minified: number;
     gzipBase64: number;
+    direct: number;
+    compressed: number;
     compressionNote: string;
   };
   warnings: string[];

@@ -13,6 +13,7 @@ import {
 import { packedCompatibility } from "./packed-compatibility";
 import { validateSource } from "./source";
 import { apiNames } from "../launcher/context";
+import { encodeBookmarklet, selectPackedEncoding } from "./packed-codec";
 
 export const packedSettingsSchema = z
   .object({
@@ -26,6 +27,7 @@ export const packedSettingsSchema = z
     warnings: z.boolean().default(true),
     search: z.boolean().default(true),
     minify: z.boolean().default(true),
+    compression: z.boolean().default(false),
   })
   .strict();
 export const packedRequestSchema = z
@@ -239,13 +241,32 @@ export async function buildPacked(
   const rawCode = assemble(raw),
     minCode = assemble(minified);
   const code = input.settings.minify ? minCode : rawCode;
-  const encode = (source: string) =>
-    "javascript:" +
-    encodeURIComponent(source).replace(
-      /[!'()*]/g,
-      (char) => "%" + char.charCodeAt(0).toString(16).toUpperCase(),
+  const payload = gzipSync(code, { level: 9 }).toString("base64url");
+  const loader = await readFile(
+    join(process.cwd(), "public", "packed-compressed.js"),
+    "utf8",
+  );
+  const compressedCode = `void (()=>{\n${loader}\nvoid RaxletCompressed.start(${JSON.stringify(manifest.origin)},${JSON.stringify(payload)},${bytes(code)});\n})();`;
+  const {
+    directBookmarklet,
+    compressedBookmarklet,
+    compressionApplied,
+    bookmarkletCode,
+    bookmarklet,
+  } = selectPackedEncoding(code, compressedCode, input.settings.compression);
+  const warnings: string[] = [];
+  if (compressionApplied)
+    warnings.push(
+      "Experimental gzip compression requires native browser decompression and dynamic JavaScript execution. CSP or Trusted Types may block it. Use the standard bookmarklet fallback if it fails.",
     );
-  const bookmarklet = encode(code);
+  if (input.settings.compression && !compressionApplied)
+    warnings.push(
+      "Compression did not reduce the final URL size after loader overhead; a standard bookmarklet was generated instead.",
+    );
+  if (bookmarklet.length > 64000)
+    warnings.push(
+      "This bookmarklet exceeds the conservative 64,000-character target. Browser and bookmark-sync limits vary; test saving and launching it or split the build.",
+    );
   if (bookmarklet.length > 4000000)
     throw new Error(
       "Encoded bookmarklet exceeds the 4MB generation limit. Select fewer scripts.",
@@ -253,6 +274,9 @@ export async function buildPacked(
   const output: PackedOutput = {
     name: input.name,
     code,
+    bookmarkletCode,
+    bookmarkletHash: packedHash(bookmarkletCode),
+    compressionApplied,
     bookmarklet,
     manifest,
     hash: packedHash(code),
@@ -260,22 +284,22 @@ export async function buildPacked(
     bytes: bytes(bookmarklet),
     codeBytes: bytes(code),
     generatedAt: new Date().toISOString(),
-    compression: "None · directly executable JavaScript",
-    compatibility:
-      "Compatible HTTP(S) pages only; CSP, Trusted Types, browser restrictions, and userscript behavior still apply.",
+    compression: compressionApplied
+      ? "Experimental gzip + base64url · native decompression and dynamic execution"
+      : "None · directly executable JavaScript",
+    compatibility: compressionApplied
+      ? "Experimental: requires DecompressionStream (gzip) and CSP/Trusted Types permission for Function compilation, in addition to ordinary bookmarklet compatibility."
+      : "Compatible HTTP(S) pages only; CSP, Trusted Types, browser restrictions, and userscript behavior still apply.",
     sizes: {
-      unminified: bytes(encode(rawCode)),
-      minified: bytes(encode(minCode)),
-      gzipBase64: bytes(encodeURIComponent(gzipSync(code).toString("base64"))),
+      unminified: bytes(encodeBookmarklet(rawCode)),
+      minified: bytes(encodeBookmarklet(minCode)),
+      gzipBase64: bytes(payload),
+      direct: bytes(directBookmarklet),
+      compressed: bytes(compressedBookmarklet),
       compressionNote:
-        "Gzip/base64 is a comparison lower bound, excluding the decompressor and execution loader. Compressed text cannot execute directly; no eval, Function, or script injection loader is used.",
+        "Compressed URL size includes the gzip payload, base64url, native decompression loader, and URL encoding. Gzip/base64url alone is a lower bound excluding loader overhead. Compression is opt-in and used only when the complete URL is smaller; dynamic execution can be blocked by CSP/Trusted Types.",
     },
-    warnings:
-      bookmarklet.length > 64000
-        ? [
-            "This bookmarklet is large. Browsers and bookmark-sync services have varying practical limits; test saving and launching it, or split it into smaller builds.",
-          ]
-        : [],
+    warnings,
   };
   if (bytes(JSON.stringify(output)) > 4000000)
     throw new Error(

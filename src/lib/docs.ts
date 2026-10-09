@@ -36,7 +36,7 @@ export const documents: Record<
         paragraphs: [
           "Approved public HTTPS @require scripts and UTF-8 text @resource files are retrieved only during generation and embedded in order. Unsupported APIs, unsafe URLs, module dependencies, and binary resources are rejected. Text resource APIs and Cloud Mode's supported GM subset are available.",
           "CSP can block the bookmarklet before it starts, inline styles, or selected script behavior. Trusted Types, browser restrictions, and cross-origin rules still apply. Packing cannot bypass these restrictions. Precise @run-at and extension-only APIs are unsupported.",
-          "Launcher minification preserves selected source verbatim. Compression is disabled because compressed text needs a separate execution loader. Practical bookmark and sync limits vary; large output gets a warning. Split large selections into collection bookmarks.",
+          "Launcher minification preserves selected source verbatim. Experimental gzip compression is opt-in, preserves source losslessly, and is used only if the full encoded URL including its loader is smaller. It requires native browser gzip decompression and CSP/Trusted Types permission for dynamic Function compilation. Failure is reported; copy the standard fallback for better compatibility. Preview and download show the decompressed program, with a loader preview toggle. Practical bookmark and sync limits vary; 64,000 characters is a conservative target, not a universal maximum. Split large selections into collection bookmarks.",
         ],
       },
       {

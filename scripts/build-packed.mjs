@@ -15,3 +15,13 @@ for (const minify of [false, true]) {
     legalComments: "none",
   });
 }
+await build({
+  entryPoints: ["src/launcher/packed-compressed.ts"],
+  bundle: true,
+  minify: true,
+  format: "iife",
+  globalName: "RaxletCompressed",
+  target: ["es2022"],
+  outfile: "public/packed-compressed.js",
+  legalComments: "none",
+});

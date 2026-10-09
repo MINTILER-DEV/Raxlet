@@ -218,6 +218,20 @@ describe("real PostgreSQL platform lifecycle", () => {
     expect(output.json.data.code).not.toContain(aliceSession);
     expect(output.json.data.code).not.toContain(alice);
     expect(output.json.data.manifest.scripts[0]).not.toHaveProperty("settings");
+    const compressed = await request(
+      "packed/build",
+      "POST",
+      { ...input, settings: { compression: true } },
+      alice,
+    );
+    expect(compressed.status).toBe(200);
+    expect(compressed.json.data.compressionApplied).toBe(true);
+    expect(compressed.json.data.bytes).toBeLessThan(
+      compressed.json.data.sizes.direct,
+    );
+    expect(compressed.json.data.code).not.toContain(aliceSession);
+    expect(compressed.json.data.bookmarkletCode).not.toContain(aliceSession);
+    expect(compressed.json.data.manifest.settings.compression).toBe(true);
   });
   it("rejects invalid syntax, empty entry patches, and unconfirmed/unsafe URL imports", async () => {
     expect(

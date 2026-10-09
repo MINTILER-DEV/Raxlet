@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { buildPacked, packedRequestSchema } from "../../src/lib/packed-build";
 import { packedCompatibility } from "../../src/lib/packed-compatibility";
 import { parseMetadata } from "../../src/lib/userscript";
+import { encodeBookmarklet } from "../../src/lib/packed-codec";
 const base = process.env.RAXLET_TEST_URL ?? "http://localhost:3000";
 const source = `// ==UserScript==
 // @name Packed café 🚀
@@ -16,7 +17,11 @@ const runs = await GM.getValue('runs', 0);
 await GM.setValue('runs', runs + 1);
 document.querySelector('#result').textContent = 'Offline café 🚀 ' + (runs + 1);
 `;
-async function artifact(code = source, dependencies = false) {
+async function artifact(
+  code = source,
+  dependencies = false,
+  compression = false,
+) {
   const metadata = parseMetadata(code);
   return buildPacked(
     [
@@ -39,6 +44,7 @@ async function artifact(code = source, dependencies = false) {
     packedRequestSchema.parse({
       selections: [{ id: "fixture", versionId: "fixture-1" }],
       dependenciesApproved: dependencies,
+      settings: { compression },
     }),
     base,
     async () => "offline resource",
@@ -85,9 +91,18 @@ test("builder selects scripts, saves profiles, previews/downloads output, and ex
     page.getByRole("button", { name: "Generate bookmarklet" }),
   ).toBeDisabled();
   await page.getByRole("button", { name: "Load profile" }).click();
+  await page
+    .getByLabel("Experimental compressed bookmarklet", { exact: true })
+    .check();
   await page.getByRole("button", { name: "Generate bookmarklet" }).click();
   await expect(page.getByLabel("Generated bookmarklet URL")).toBeAttached();
   const url = await page.getByLabel("Generated bookmarklet URL").inputValue();
+  expect(
+    (await page.getByLabel("Standard bookmarklet URL").inputValue()).length,
+  ).toBeGreaterThan(url.length);
+  await expect(
+    page.getByRole("button", { name: "Copy standard fallback" }),
+  ).toBeVisible();
   const link = page.getByRole("link", { name: /Drag to bookmarks/ });
   await expect(link).toHaveAttribute("href", url);
   await link.click();
@@ -251,6 +266,94 @@ test("packed launch refuses the authenticated account origin without executing s
     source + "\nthrow new Error('must not execute on account origin');",
   );
   await page.goto("/");
+  const dialog = page.waitForEvent("dialog");
+  await page.evaluate((url) => {
+    location.href = url;
+  }, output.bookmarklet);
+  const alert = await dialog;
+  expect(alert.message()).toContain("account origin");
+  await alert.dismiss();
+  await expect(page.locator("#raxlet-packed-launcher")).toHaveCount(0);
+});
+test("compressed execution reports CSP denial and the standard fallback still works", async ({
+  page,
+}) => {
+  const output = await artifact(source, false, true);
+  expect(output.compressionApplied).toBe(true);
+  await page.goto("http://127.0.0.1:4311/packed-inline");
+  const dialog = page.waitForEvent("dialog");
+  await page.evaluate((url) => {
+    location.href = url;
+  }, output.bookmarklet);
+  const alert = await dialog;
+  expect(alert.message()).toContain("experimental compression failed");
+  expect(alert.message()).toContain("CSP");
+  await alert.dismiss();
+  await expect(page.locator("#raxlet-packed-launcher")).toHaveCount(0);
+  await expect(page.locator("#result")).toHaveText("Not run");
+  await page.evaluate((url) => {
+    location.href = url;
+  }, encodeBookmarklet(output.code));
+  const panel = page.locator("#raxlet-packed-launcher");
+  await panel
+    .getByRole("button", { name: "Enable or disable Packed café 🚀" })
+    .click();
+  await panel.getByRole("button", { name: "Run", exact: true }).click();
+  await panel.getByRole("button", { name: "Confirm & run" }).click();
+  await expect(page.locator("#result")).toHaveText("Offline café 🚀 1");
+});
+test("compressed loader explains missing browser decompression support", async ({
+  page,
+}) => {
+  const output = await artifact(source, false, true);
+  await page.goto("http://127.0.0.1:4311/");
+  await page.evaluate(() => {
+    Object.defineProperty(window, "DecompressionStream", {
+      value: undefined,
+      configurable: true,
+    });
+  });
+  const dialog = page.waitForEvent("dialog");
+  await page.evaluate((url) => {
+    location.href = url;
+  }, output.bookmarklet);
+  const alert = await dialog;
+  expect(alert.message()).toContain("does not support native gzip");
+  await alert.dismiss();
+  await expect(page.locator("#raxlet-packed-launcher")).toHaveCount(0);
+});
+test("corrupted gzip fails without opening a launcher or executing a script", async ({
+  page,
+}) => {
+  const output = await artifact(source, false, true);
+  const payload = output.bookmarkletCode.match(
+    /RaxletCompressed\.start\("[^"\n]*","([A-Za-z0-9_-]+)"/,
+  )![1];
+  await page.goto("http://127.0.0.1:4311/");
+  const dialog = page.waitForEvent("dialog");
+  await page.evaluate(
+    (url) => {
+      location.href = url;
+    },
+    encodeBookmarklet(output.bookmarkletCode.replace(payload, "AAAA")),
+  );
+  const alert = await dialog;
+  expect(alert.message()).toContain("experimental compression failed");
+  await alert.dismiss();
+  await expect(page.locator("#raxlet-packed-launcher")).toHaveCount(0);
+  await expect(page.locator("#result")).toHaveText("Not run");
+});
+test("compressed loader blocks the account origin before decompression or dynamic compilation", async ({
+  page,
+}) => {
+  const output = await artifact(source, false, true);
+  await page.goto("/");
+  await page.evaluate(() => {
+    Object.defineProperty(window, "DecompressionStream", {
+      value: undefined,
+      configurable: true,
+    });
+  });
   const dialog = page.waitForEvent("dialog");
   await page.evaluate((url) => {
     location.href = url;

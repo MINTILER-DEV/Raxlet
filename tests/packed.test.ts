@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { runInNewContext } from "node:vm";
+import { gunzipSync } from "node:zlib";
+import { encodeBookmarklet, selectPackedEncoding } from "@/lib/packed-codec";
 import {
   buildPacked,
   packedHash,
@@ -244,9 +246,7 @@ describe("Packed Mode generation", () => {
     expect(compact.codeBytes).toBe(Buffer.byteLength(compact.code));
     expect(compact.sizes.minified).toBeLessThan(compact.sizes.unminified);
     expect(compact.compression).toContain("None");
-    expect(compact.sizes.compressionNote).toContain(
-      "excluding the decompressor",
-    );
+    expect(compact.sizes.compressed).toBeGreaterThan(compact.sizes.gzipBase64);
     expect(raw.code).toContain(source);
     expect(compact.code).toContain(source);
   });
@@ -286,5 +286,41 @@ describe("Packed Mode generation", () => {
     await runners[1]();
     await runners[0]();
     expect(sandbox.order).toEqual(["b", "a"]);
+  });
+  it("compresses deterministically, round-trips Unicode and source exactly, and reports the complete loader size", async () => {
+    const options = { settings: { ...packedDefaults, compression: true } };
+    const first = await build([candidate()], options),
+      second = await build([candidate()], options);
+    expect(first.compressionApplied).toBe(true);
+    expect(first.compression).toContain("gzip");
+    expect(first.bookmarklet).toBe(second.bookmarklet);
+    expect(first.bytes).toBeLessThan(first.sizes.direct);
+    expect(first.bytes).toBe(first.sizes.compressed);
+    expect(decodeURIComponent(first.bookmarklet.slice(11))).toBe(
+      first.bookmarkletCode,
+    );
+    expect(first.bookmarkletHash).toBe(packedHash(first.bookmarkletCode));
+    expect(first.hash).toBe(packedHash(first.code));
+    const args = first.bookmarkletCode.match(
+      /RaxletCompressed\.start\(("[^"\n]*"),("[A-Za-z0-9_-]+"),(\d+)\)/,
+    )!;
+    const unpacked = gunzipSync(Buffer.from(JSON.parse(args[2]), "base64url"));
+    expect(unpacked.toString("utf8")).toBe(first.code);
+    expect(unpacked.byteLength).toBe(Number(args[3]));
+    expect(unpacked.toString("utf8")).toContain(source);
+    expect(encodeBookmarklet(first.code).length).toBe(first.sizes.direct);
+  });
+  it("uses the standard artifact when compression is disabled or loader overhead makes it larger", () => {
+    const direct = "void 0;",
+      loader = "void '" + "large-loader".repeat(100) + "';";
+    const chosen = selectPackedEncoding(direct, loader, true);
+    expect(chosen.compressionApplied).toBe(false);
+    expect(chosen.bookmarklet).toBe(encodeBookmarklet(direct));
+    expect(selectPackedEncoding(loader, direct, false).compressionApplied).toBe(
+      false,
+    );
+    expect(selectPackedEncoding(loader, direct, true).compressionApplied).toBe(
+      true,
+    );
   });
 });

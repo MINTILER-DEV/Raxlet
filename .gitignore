@@ -8,6 +8,7 @@ coverage/
 .DS_Store
 public/monaco/
 public/packed-runtime*.js
+public/packed-compressed.js
 playwright-report/
 test-results/
 .vercel
