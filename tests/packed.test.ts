@@ -87,6 +87,101 @@ function capture(output: PackedOutput) {
   return captured!;
 }
 describe("Packed Mode generation", () => {
+  it("minifies scripts and dependencies without running them, retaining names, licenses, metadata and original hashes", async () => {
+    const dependency = `/*! dependency license */
+      const dependencyPrefix = 'café 🚀';
+      function namedDependency(value) { return dependencyPrefix + value; }
+      class NamedDependency { static result() { return NamedDependency.name; } }
+      globalThis.dependencyExecuted = true;
+    `;
+    const code =
+      source.replace(
+        "// @grant none",
+        "// @grant none\n// @require https://example.com/dependency.js",
+      ) +
+      `
+      ${"// padding removed by minification\n".repeat(80)}
+      function originalFunctionName(value) { return namedDependency(value); }
+      /* @__PURE__ */ originalFunctionName(globalThis.sideEffect = ' executed');
+      globalThis.minifiedResult = [originalFunctionName.name, NamedDependency.result(), originalFunctionName(' 日本語')];
+      const evalSensitiveVariable = 'eval scope';
+      globalThis.evalResult = eval('evalSensitiveVariable');
+    `;
+    const options = {
+      settings: { ...packedDefaults, minifyScripts: true },
+      dependenciesApproved: true,
+    };
+    const load = vi.fn(async () => dependency);
+    const output = await build([candidate(code)], options, load);
+    const again = await build([candidate(code)], options, load);
+    expect(output.bookmarklet).toBe(again.bookmarklet);
+    expect(output.minifiedScripts).toBe(1);
+    expect(output.sizes.scriptsPacked).toBeLessThan(
+      output.sizes.scriptsOriginal,
+    );
+    expect(output.manifest.scripts[0].hash).toBe(packedHash(code));
+    expect(output.manifest.scripts[0].dependencies[0].hash).toBe(
+      packedHash(dependency),
+    );
+    expect(output.manifest.scripts[0].metadata.custom).toEqual(["one", "two"]);
+    expect(output.manifest.scripts[0].metaStr).toContain("// @custom two");
+    expect(output.code).toContain("/*! dependency license */");
+    expect(output.code).not.toContain("// padding removed by minification");
+    expect(output.compressionApplied).toBe(false);
+    expect(output.code).not.toContain("new Function");
+    expect(globalThis).not.toHaveProperty("dependencyExecuted");
+    const { runners, sandbox } = capture(output);
+    expect(sandbox).not.toHaveProperty("dependencyExecuted");
+    await runners[0]();
+    expect(sandbox.dependencyExecuted).toBe(true);
+    expect(sandbox.sideEffect).toBe(" executed");
+    expect(sandbox.evalResult).toBe("eval scope");
+    expect(sandbox.minifiedResult).toEqual([
+      "originalFunctionName",
+      "NamedDependency",
+      "café 🚀 日本語",
+    ]);
+  });
+  it("keeps a runner unchanged when esbuild name helper overhead increases its encoded size", async () => {
+    const code = `// ==UserScript==
+// @name Small
+// @version 1.0.0
+// @match https://example.com/*
+// ==/UserScript==
+${Array.from({ length: 10 }, (_, i) => `function f${i}(){return ${i}}`).join("")}
+globalThis.result=[${Array.from({ length: 10 }, (_, i) => `f${i}.name`).join(",")}];`;
+    const output = await build([candidate(code)], {
+      settings: { ...packedDefaults, minifyScripts: true },
+    });
+    expect(output.minifiedScripts).toBe(0);
+    expect(output.manifest.scripts[0].minified).toBe(false);
+    expect(output.sizes.scriptsOriginal).toBe(output.sizes.scriptsPacked);
+    expect(output.code).toContain(code);
+    expect(output.warnings.join(" ")).toContain("did not reduce");
+  });
+  it("combines esbuild and gzip while retaining the minified directly executable fallback", async () => {
+    const code = source + "\n" + "// removable padding\n".repeat(200);
+    const output = await build([candidate(code)], {
+      settings: { ...packedDefaults, minifyScripts: true, compression: true },
+    });
+    expect(output.minifiedScripts).toBe(1);
+    expect(output.compressionApplied).toBe(true);
+    const payload = output.bookmarkletCode.match(
+      /RaxletCompressed\.start\([^,]+,"([A-Za-z0-9_-]+)",/,
+    )!;
+    expect(gunzipSync(Buffer.from(payload[1], "base64url")).toString()).toBe(
+      output.code,
+    );
+    const { runners, sandbox } = capture(output);
+    await runners[0]();
+    expect(sandbox.packedResult).toContain("🚀");
+    expect(output.manifest.scripts[0].hash).toBe(packedHash(code));
+    expect(
+      packedRequestSchema.parse({
+        selections: [{ id: "a", versionId: "a-v1" }],
+      }).settings.minifyScripts,
+    ).toBe(false);
+  });
   it("builds deterministically regardless of selection or metadata object key order", async () => {
     const a = candidate(),
       b = candidate(source.replace("café", "Other"), "b");

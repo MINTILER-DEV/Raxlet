@@ -21,6 +21,7 @@ async function artifact(
   code = source,
   dependencies = false,
   compression = false,
+  minifyScripts = false,
 ) {
   const metadata = parseMetadata(code);
   return buildPacked(
@@ -44,7 +45,7 @@ async function artifact(
     packedRequestSchema.parse({
       selections: [{ id: "fixture", versionId: "fixture-1" }],
       dependenciesApproved: dependencies,
-      settings: { compression },
+      settings: { compression, minifyScripts },
     }),
     base,
     async () => "offline resource",
@@ -92,10 +93,16 @@ test("builder selects scripts, saves profiles, previews/downloads output, and ex
   ).toBeDisabled();
   await page.getByRole("button", { name: "Load profile" }).click();
   await page
+    .getByLabel("Experimental JavaScript minification (esbuild)", {
+      exact: true,
+    })
+    .check();
+  await page
     .getByLabel("Experimental compressed bookmarklet", { exact: true })
     .check();
   await page.getByRole("button", { name: "Generate bookmarklet" }).click();
   await expect(page.getByLabel("Generated bookmarklet URL")).toBeAttached();
+  await expect(page.getByText(/Esbuild minified 1 of 1 scripts/)).toBeVisible();
   const url = await page.getByLabel("Generated bookmarklet URL").inputValue();
   expect(
     (await page.getByLabel("Standard bookmarklet URL").inputValue()).length,
@@ -239,6 +246,43 @@ test("direct packed functions work without unsafe-eval, text resources are embed
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Escape");
   await expect(panel).toHaveCount(0);
+  await context.setOffline(false);
+});
+test("esbuild minified scripts run offline without unsafe-eval and preserve names and GM metadata", async ({
+  page,
+  context,
+}) => {
+  const code =
+    source.replace(
+      "@grant GM.getValue",
+      "@grant GM_info\n// @grant GM.getValue",
+    ) +
+    `
+    ${"// removable padding\n".repeat(100)}
+    function originalFunctionName() { return originalFunctionName.name; }
+    document.querySelector('#result').textContent += ' ' + originalFunctionName() + ' ' + GM_info.scriptMetaStr.includes('// @grant GM_info');
+  `;
+  const output = await artifact(code, false, false, true);
+  expect(output.minifiedScripts).toBe(1);
+  expect(output.compressionApplied).toBe(false);
+  await page.goto("http://127.0.0.1:4311/packed-inline");
+  const requests: string[] = [];
+  page.on("request", (request) => requests.push(request.url()));
+  await context.setOffline(true);
+  await page.evaluate((url) => {
+    location.href = url;
+  }, output.bookmarklet);
+  const panel = page.locator("#raxlet-packed-launcher");
+  await expect(page.locator("#result")).toHaveText("Not run");
+  await panel
+    .getByRole("button", { name: "Enable or disable Packed café 🚀" })
+    .click();
+  await panel.getByRole("button", { name: "Run", exact: true }).click();
+  await panel.getByRole("button", { name: "Confirm & run" }).click();
+  await expect(page.locator("#result")).toHaveText(
+    "Offline café 🚀 1 originalFunctionName true",
+  );
+  expect(requests).toEqual([]);
   await context.setOffline(false);
 });
 test("browser CSP blocks the actual bookmarklet before launch", async ({

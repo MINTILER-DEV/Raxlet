@@ -31,7 +31,7 @@ For local PostgreSQL use a connection string such as `postgresql://user:password
 - Source review, version histories, screenshot URLs, installed-user ratings, author follows, reports, and admin moderation.
 - Reusable bookmarklet and console snippet; vanilla draggable Shadow DOM panel; manual execution, matching, status, errors, and selected GM APIs.
 - Session-bound, exact-origin launcher approval with a revocable 15-minute bridge. Account credentials never reach the target page.
-- Packed Mode builder: self-contained offline bookmarklets, reviewed script selection, approved bundled dependencies, configurable vanilla launcher, exact size reporting, downloads/source preview, local saved profiles, and opt-in experimental gzip compression with full-size comparison and a standard fallback. See [Packed Mode](docs/packed.md).
+- Packed Mode builder: self-contained offline bookmarklets, reviewed script selection, approved bundled dependencies, configurable vanilla launcher, exact size reporting, downloads/source preview, local saved profiles, opt-in experimental esbuild userscript/dependency minification, and experimental gzip compression with full-size comparison and a standard fallback. See [Packed Mode](docs/packed.md).
 - REST APIs, persistent rate limits, ownership checks, input validation, escaped source display, SSRF-resistant URL fetching, security headers, migrations, and health check.
 
 ## Commands

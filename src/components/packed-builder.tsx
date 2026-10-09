@@ -427,7 +427,11 @@ export function PackedBuilder() {
                 ["descriptions", "Display descriptions"],
                 ["warnings", "Display compatibility warnings"],
                 ["search", "Include search bar"],
-                ["minify", "Minify launcher code (preserve userscript source)"],
+                ["minify", "Minify launcher code"],
+                [
+                  "minifyScripts",
+                  "Experimental JavaScript minification (esbuild)",
+                ],
                 ["compression", "Experimental compressed bookmarklet"],
               ] as const
             ).map(([key, label]) => (
@@ -443,9 +447,19 @@ export function PackedBuilder() {
                 <span className="min-w-0 flex-1">{label}</span>
               </label>
             ))}
+            {settings.minifyScripts && (
+              <p className="alert text-xs">
+                Minifies selected userscripts and approved @require
+                dependencies. Function/class names and legal comments are
+                retained, but source inspection and optimization-sensitive
+                behavior may change. Test the generated bookmarklet. Original
+                versions are unchanged; code is kept unchanged when minification
+                would increase its encoded size.
+              </p>
+            )}
             {settings.compression && (
               <p className="alert text-xs">
-                Compresses the entire launcher and original scripts losslessly
+                Compresses the entire generated launcher and scripts losslessly
                 with gzip. Requires native browser decompression and dynamic
                 execution, which CSP or Trusted Types may block. Only used if
                 the complete bookmarklet URL is smaller.
@@ -462,6 +476,8 @@ export function PackedBuilder() {
               including launcher, metadata, and URL encoding. External
               dependency sizes are additional and unknown until retrieved. Exact
               size is shown after generation. Up to 30 scripts per build.
+              {settings.minifyScripts &&
+                " This estimate is before experimental JavaScript minification."}
               {settings.compression &&
                 " This estimate is before experimental compression; the final result includes loader overhead."}
             </p>
@@ -660,6 +676,16 @@ export function PackedBuilder() {
             {output.compression}
           </p>
           <p className="muted text-sm">{output.compatibility}</p>
+          {output.manifest.settings.minifyScripts && (
+            <p className="muted text-sm">
+              Esbuild minified {output.minifiedScripts} of{" "}
+              {output.manifest.scripts.length} scripts. Script runners:{" "}
+              {size(output.sizes.scriptsOriginal)}
+              {" → "}
+              {size(output.sizes.scriptsPacked)} before URL encoding, excluding
+              metadata, resources, and launcher overhead.
+            </p>
+          )}
           {output.compressionApplied && (
             <p className="alert">
               Compressed from {size(output.sizes.direct)} to{" "}
@@ -862,8 +888,8 @@ export function PackedBuilder() {
               Size comparison and optimization
             </summary>
             <p className="muted text-sm mt-3">
-              Unminified, URL encoded: {size(output.sizes.unminified)}. Minified
-              launcher, URL encoded: {size(output.sizes.minified)}.
+              Unminified launcher, URL encoded: {size(output.sizes.unminified)}.
+              Minified launcher, URL encoded: {size(output.sizes.minified)}.
               Gzip/base64url payload alone: {size(output.sizes.gzipBase64)}.
               Complete compressed URL including loader:{" "}
               {size(output.sizes.compressed)}. Standard URL for these settings:{" "}
@@ -873,7 +899,8 @@ export function PackedBuilder() {
             <p className="muted text-xs mt-2">
               Reduce size by selecting fewer scripts, using collections for
               separate bookmarklets, or choosing minification. Userscript source
-              is preserved verbatim.
+              is preserved verbatim unless experimental JavaScript minification
+              is applied. Gzip can be combined with minification.
             </p>
           </details>
         </section>

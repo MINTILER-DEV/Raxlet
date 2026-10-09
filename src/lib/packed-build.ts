@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { parse } from "acorn";
+import { transform } from "esbuild";
 import { z } from "zod";
 import {
   packedDefaults,
@@ -27,6 +28,7 @@ export const packedSettingsSchema = z
     warnings: z.boolean().default(true),
     search: z.boolean().default(true),
     minify: z.boolean().default(true),
+    minifyScripts: z.boolean().default(false),
     compression: z.boolean().default(false),
   })
   .strict();
@@ -164,66 +166,92 @@ export async function buildPacked(
   )
     throw new Error("External dependencies exceed the 1MB build limit.");
   const runners: string[] = [];
-  const scripts = analyzed.map(
-    ({ candidate: c, metadata, compatibility, deps }) => {
-      const required = deps.requires.map((url) => {
-        const source = contents.get(url)!;
-        // Only classic JS dependencies. Parsing never evaluates downloaded code.
-        parse(source, { ecmaVersion: "latest", sourceType: "script" });
-        const depCompatibility = packedCompatibility(
-          { ...metadata, require: [], resource: [] },
-          source,
+  const scripts: PackedManifest["scripts"] = [];
+  let scriptsOriginal = 0;
+  let scriptsPacked = 0;
+  for (const { candidate: c, metadata, compatibility, deps } of analyzed) {
+    const required = deps.requires.map((url) => {
+      const source = contents.get(url)!;
+      // Only classic JS dependencies. Parsing never evaluates downloaded code.
+      parse(source, { ecmaVersion: "latest", sourceType: "script" });
+      const depCompatibility = packedCompatibility(
+        { ...metadata, require: [], resource: [] },
+        source,
+      );
+      if (!depCompatibility.supported)
+        throw new Error(
+          `${c.name} dependency ${url}: ${depCompatibility.blockers.join(" ")}`,
         );
-        if (!depCompatibility.supported)
-          throw new Error(
-            `${c.name} dependency ${url}: ${depCompatibility.blockers.join(" ")}`,
-          );
-        return source;
+      return source;
+    });
+    const runner = `async function(${apiNames.join(",")},GM){"use strict";\n${required.map((s) => s + "\n;").join("\n")}\n${c.source}\n}`;
+    // Check the actual wrapper for parameter collisions and cross-file syntax errors.
+    parse("(" + runner + ")", {
+      ecmaVersion: "latest",
+      sourceType: "script",
+    });
+    let packedRunner = runner;
+    if (input.settings.minifyScripts) {
+      // Transform only: no evaluation, plugins, bundling, or filesystem imports.
+      // Keep helper declarations in a local closure. The array avoids assigning
+      // an inferred name to the originally anonymous runner.
+      const result = await transform(`const __raxletRunner=[${runner}];`, {
+        loader: "js",
+        target: "esnext",
+        minify: true,
+        keepNames: true,
+        ignoreAnnotations: true,
+        treeShaking: false,
+        legalComments: "inline",
       });
-      const runner = `async function(${apiNames.join(",")},GM){"use strict";\n${required.map((s) => s + "\n;").join("\n")}\n${c.source}\n}`;
-      // Check the actual wrapper for parameter collisions and cross-file syntax errors.
-      parse("(" + runner + ")", {
+      const expression = `(()=>{${result.code}\nreturn __raxletRunner[0]})()`;
+      parse("(" + expression + ")", {
         ecmaVersion: "latest",
         sourceType: "script",
       });
-      runners.push(runner);
-      return {
-        id: c.id,
-        scriptId: c.scriptId,
-        versionId: c.versionId,
-        version: metadata.version[0],
-        name: metadata.name[0],
-        description: metadata.description?.[0] ?? "",
-        metadata,
-        enabled: input.settings.initiallyEnabled,
-        hash: packedHash(c.source),
-        bytes:
-          bytes(runner) +
-          deps.resources.reduce(
-            (sum, r) => sum + bytes(contents.get(r.url)!),
-            0,
-          ),
-        warnings: compatibility.warnings,
-        metaStr:
-          c.source
-            .match(
-              /(?:^|\n)[ \t]*\/\/[ \t]*==UserScript==[\s\S]*?\/\/[ \t]*==\/UserScript==/,
-            )?.[0]
-            .trim() ?? "",
-        resources: Object.fromEntries(
-          deps.resources.map((r) => [r.name, contents.get(r.url)!]),
-        ),
-        dependencies: [
-          ...deps.requires,
-          ...deps.resources.map((r) => r.url),
-        ].map((url) => ({
+      if (
+        encodeBookmarklet(expression).length < encodeBookmarklet(runner).length
+      )
+        packedRunner = expression;
+    }
+    runners.push(packedRunner);
+    scriptsOriginal += bytes(runner);
+    scriptsPacked += bytes(packedRunner);
+    scripts.push({
+      id: c.id,
+      scriptId: c.scriptId,
+      versionId: c.versionId,
+      version: metadata.version[0],
+      name: metadata.name[0],
+      description: metadata.description?.[0] ?? "",
+      metadata,
+      enabled: input.settings.initiallyEnabled,
+      hash: packedHash(c.source),
+      minified: packedRunner !== runner,
+      packedHash: packedHash(packedRunner),
+      originalBytes: bytes(runner),
+      bytes:
+        bytes(packedRunner) +
+        deps.resources.reduce((sum, r) => sum + bytes(contents.get(r.url)!), 0),
+      warnings: compatibility.warnings,
+      metaStr:
+        c.source
+          .match(
+            /(?:^|\n)[ \t]*\/\/[ \t]*==UserScript==[\s\S]*?\/\/[ \t]*==\/UserScript==/,
+          )?.[0]
+          .trim() ?? "",
+      resources: Object.fromEntries(
+        deps.resources.map((r) => [r.name, contents.get(r.url)!]),
+      ),
+      dependencies: [...deps.requires, ...deps.resources.map((r) => r.url)].map(
+        (url) => ({
           url,
           hash: packedHash(contents.get(url)!),
           bytes: bytes(contents.get(url)!),
-        })),
-      };
-    },
-  );
+        }),
+      ),
+    });
+  }
   const manifest: PackedManifest = {
     format: 1,
     name: input.name,
@@ -255,6 +283,16 @@ export async function buildPacked(
     bookmarklet,
   } = selectPackedEncoding(code, compressedCode, input.settings.compression);
   const warnings: string[] = [];
+  const minifiedScripts = scripts.filter((s) => s.minified).length;
+  if (input.settings.minifyScripts) {
+    warnings.push(
+      "Experimental esbuild minification changes userscript and @require source. Function/class names and legal comments are retained, but source inspection and optimization-sensitive behavior may differ. Test on a target page; original versions remain unchanged.",
+    );
+    if (minifiedScripts < scripts.length)
+      warnings.push(
+        `${scripts.length - minifiedScripts} script(s) kept their original source because minification did not reduce their encoded runner size.`,
+      );
+  }
   if (compressionApplied)
     warnings.push(
       "Experimental gzip compression requires native browser decompression and dynamic JavaScript execution. CSP or Trusted Types may block it. Use the standard bookmarklet fallback if it fails.",
@@ -277,6 +315,7 @@ export async function buildPacked(
     bookmarkletCode,
     bookmarkletHash: packedHash(bookmarkletCode),
     compressionApplied,
+    minifiedScripts,
     bookmarklet,
     manifest,
     hash: packedHash(code),
@@ -293,6 +332,8 @@ export async function buildPacked(
     sizes: {
       unminified: bytes(encodeBookmarklet(rawCode)),
       minified: bytes(encodeBookmarklet(minCode)),
+      scriptsOriginal,
+      scriptsPacked,
       gzipBase64: bytes(payload),
       direct: bytes(directBookmarklet),
       compressed: bytes(compressedBookmarklet),

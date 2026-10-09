@@ -2,12 +2,13 @@ import type { NextConfig } from "next";
 const config: NextConfig = {
   poweredByHeader: false,
   outputFileTracingRoot: process.cwd(),
-  serverExternalPackages: ["pg"],
+  serverExternalPackages: ["pg", "esbuild"],
   outputFileTracingIncludes: {
     "/api/*": [
       "./public/packed-runtime.js",
       "./public/packed-runtime.min.js",
       "./public/packed-compressed.js",
+      "./node_modules/@esbuild/*/bin/esbuild",
     ],
   },
   async headers() {
