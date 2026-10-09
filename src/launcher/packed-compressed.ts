@@ -1,4 +1,4 @@
-// This opt-in loader needs CSP-permitted dynamic execution. It never relaxes CSP.
+// This gzip loader needs CSP-permitted dynamic execution. It never relaxes CSP.
 export async function start(
   origin: string,
   payload: string,

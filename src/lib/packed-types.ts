@@ -7,11 +7,8 @@ export type PackedSettings = {
   descriptions: boolean;
   warnings: boolean;
   search: boolean;
-  minify: boolean;
-  minifyScripts: boolean;
-  terser: "off" | "always" | "auto";
-  compression: boolean;
 };
+export const PACKED_SIZE_LIMIT = 65_536;
 export const packedDefaults: PackedSettings = {
   theme: "dark",
   position: "bottom-right",
@@ -20,10 +17,6 @@ export const packedDefaults: PackedSettings = {
   descriptions: true,
   warnings: true,
   search: true,
-  minify: true,
-  minifyScripts: false,
-  terser: "off",
-  compression: false,
 };
 export type PackedCandidate = {
   id: string;
@@ -74,14 +67,8 @@ export type PackedOutput = {
   bookmarkletHash: string;
   compressionApplied: boolean;
   minifiedScripts: number;
-  terser: {
-    attempted: boolean;
-    applied: boolean;
-    scripts: number;
-    before: number;
-    after: number;
-    note: string;
-  };
+  esbuild: OptimizationResult;
+  terser: OptimizationResult;
   bookmarklet: string;
   manifest: PackedManifest;
   hash: string;
@@ -102,4 +89,12 @@ export type PackedOutput = {
     compressionNote: string;
   };
   warnings: string[];
+};
+export type OptimizationResult = {
+  attempted: boolean;
+  applied: boolean;
+  scripts: number;
+  before: number;
+  after: number;
+  note: string;
 };

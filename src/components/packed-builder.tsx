@@ -9,6 +9,7 @@ import { api, authClient, mutation } from "@/lib/client";
 import { encodeBookmarklet } from "@/lib/packed-codec";
 import {
   packedDefaults,
+  PACKED_SIZE_LIMIT,
   type PackedCandidate,
   type PackedOutput,
   type PackedSettings,
@@ -29,7 +30,7 @@ type Profile = {
   selections: { id: string; versionId: string }[];
   settings: PackedSettings;
 };
-const size = (bytes: number) => `${(bytes / 1024).toFixed(1)} KB`;
+const size = (bytes: number) => `${(bytes / 1024).toFixed(1)} KiB`;
 const estimatedScriptSize = (script: PackedCandidate) =>
   encodeURIComponent(
     script.source +
@@ -100,7 +101,7 @@ export function PackedBuilder() {
   const selection = scripts.filter((s) => selected.includes(s.id));
   const signature = JSON.stringify([name, settings, [...selected].sort()]);
   const estimatedTotal = runtimeSize
-    ? (settings.minify ? runtimeSize.minified : runtimeSize.unminified) +
+    ? runtimeSize.minified +
       selection.reduce((sum, script) => sum + estimatedScriptSize(script), 0) +
       1000
     : null;
@@ -427,12 +428,6 @@ export function PackedBuilder() {
                 ["descriptions", "Display descriptions"],
                 ["warnings", "Display compatibility warnings"],
                 ["search", "Include search bar"],
-                ["minify", "Minify launcher code"],
-                [
-                  "minifyScripts",
-                  "Experimental JavaScript minification (esbuild)",
-                ],
-                ["compression", "Experimental compressed bookmarklet"],
               ] as const
             ).map(([key, label]) => (
               <label className="row" key={key}>
@@ -444,78 +439,34 @@ export function PackedBuilder() {
                     setSettings({
                       ...settings,
                       [key]: e.target.checked,
-                      ...(key === "minifyScripts" && !e.target.checked
-                        ? { terser: "off" as const }
-                        : {}),
                     })
                   }
                 />
                 <span className="min-w-0 flex-1">{label}</span>
               </label>
             ))}
-            <label className="form-stack">
-              <span>Experimental Terser second pass</span>
-              <select
-                value={settings.terser}
-                onChange={(event) => {
-                  const terser = event.target.value as PackedSettings["terser"];
-                  setSettings({
-                    ...settings,
-                    terser,
-                    minifyScripts: terser !== "off" || settings.minifyScripts,
-                  });
-                }}
-              >
-                <option value="off">Off</option>
-                <option value="always">Always try after esbuild</option>
-                <option value="auto">
-                  Automatic when bookmarklet exceeds 64,000 characters
-                </option>
-              </select>
-            </label>
-            {settings.terser !== "off" && (
-              <p className="alert text-xs">
-                Enables esbuild first, then tries additional Terser
-                optimization. Automatic mode checks the full encoded URL after
-                esbuild and optional gzip. The previous artifact is kept unless
-                the entire bookmarklet becomes smaller. Further optimization may
-                affect script behavior; test the result. Getting below 64,000
-                characters is not guaranteed.
-              </p>
-            )}
-            {settings.minifyScripts && (
-              <p className="alert text-xs">
-                Minifies selected userscripts and approved @require
-                dependencies. Function/class names and legal comments are
-                retained, but source inspection and optimization-sensitive
-                behavior may change. Test the generated bookmarklet. Original
-                versions are unchanged; code is kept unchanged when minification
-                would increase its encoded size.
-              </p>
-            )}
-            {settings.compression && (
-              <p className="alert text-xs">
-                Compresses the entire generated launcher and scripts losslessly
-                with gzip. Requires native browser decompression and dynamic
-                execution, which CSP or Trusted Types may block. Only used if
-                the complete bookmarklet URL is smaller.
-              </p>
-            )}
+            <p className="muted text-sm">
+              Gzip compression is always applied. If the complete bookmarklet
+              exceeds 65,536 bytes (64 KiB), esbuild minifies the scripts and
+              dependencies; if it still exceeds that size, Terser runs next.
+              Each minifier result is kept only if the compressed URL is
+              smaller. Minification can change script behavior, so test the
+              result. Compressed launch requires native gzip support and dynamic
+              execution; the standard fallback is available if page policy
+              blocks it.
+            </p>
           </section>
           <section className="card form-stack">
             <h2>3. Review and build</h2>
             <p className="muted text-sm">
-              Estimated total bookmarklet:{" "}
+              Estimated bookmarklet before compression:{" "}
               {estimatedTotal === null
                 ? "Calculating…"
                 : `≈ ${size(estimatedTotal)}`}{" "}
               including launcher, metadata, and URL encoding. External
               dependency sizes are additional and unknown until retrieved. Exact
-              size is shown after generation. Up to 30 scripts per build.
-              {settings.minifyScripts &&
-                " This estimate is before experimental JavaScript minification."}
-              {settings.compression &&
-                " This estimate is before experimental compression; the final result includes loader overhead."}
+              compressed size is shown after generation. Up to 30 scripts per
+              build.
             </p>
             <p className="muted text-xs">
               Account credentials and saved GM settings are excluded. Each
@@ -637,7 +588,14 @@ export function PackedBuilder() {
                     scripts.some((c) => c.id === s.id),
                   );
                   changeSelection(found.map((s) => s.id));
-                  setSettings({ ...packedDefaults, ...profile.settings });
+                  setSettings(
+                    Object.fromEntries(
+                      Object.entries(packedDefaults).map(([key, value]) => [
+                        key,
+                        profile.settings[key as keyof PackedSettings] ?? value,
+                      ]),
+                    ) as PackedSettings,
+                  );
                   setName(profile.name);
                   if (
                     found.length !== profile.selections.length ||
@@ -676,11 +634,11 @@ export function PackedBuilder() {
             <h2>4. {output.name}</h2>
             <span className="badge green">Offline snapshot</span>
             <span
-              className={`badge ${output.characters <= 64000 ? "green" : ""}`}
+              className={`badge ${output.bytes <= PACKED_SIZE_LIMIT ? "green" : ""}`}
             >
-              {output.characters <= 64000
-                ? "Within 64,000-character target"
-                : "Above 64,000-character target"}
+              {output.bytes <= PACKED_SIZE_LIMIT
+                ? "Within 65,536-byte target"
+                : "Above 65,536-byte target"}
             </span>
           </div>
           {signature !== builtSignature && (
@@ -712,7 +670,7 @@ export function PackedBuilder() {
             {output.compression}
           </p>
           <p className="muted text-sm">{output.compatibility}</p>
-          {output.manifest.settings.minifyScripts && (
+          {(output.esbuild.applied || output.terser.applied) && (
             <p className="muted text-sm">
               JavaScript minification applied to {output.minifiedScripts} of{" "}
               {output.manifest.scripts.length} scripts. Script runners:{" "}
@@ -722,20 +680,23 @@ export function PackedBuilder() {
               metadata, resources, and launcher overhead.
             </p>
           )}
-          {output.manifest.settings.terser !== "off" && (
-            <p className="muted text-sm">
-              Terser: {output.terser.note}{" "}
-              {output.terser.attempted &&
-                `${output.terser.before.toLocaleString()} → ${output.terser.after.toLocaleString()} URL characters; ${output.terser.scripts} script(s) optimized.`}
-            </p>
-          )}
+          <p className="muted text-sm">
+            {output.esbuild.note} {output.esbuild.before.toLocaleString()} →{" "}
+            {output.esbuild.after.toLocaleString()} bytes. Terser:{" "}
+            {output.terser.note}{" "}
+            {output.terser.attempted &&
+              `${output.terser.before.toLocaleString()} → ${output.terser.after.toLocaleString()} bytes; ${output.terser.scripts} script(s) optimized.`}
+          </p>
           {output.compressionApplied && (
             <p className="alert">
               Compressed from {size(output.sizes.direct)} to{" "}
               {size(output.bytes)} including the loader (
-              {Math.round((1 - output.bytes / output.sizes.direct) * 100)}%
-              smaller). Source preview and JavaScript download contain the
-              decompressed program for inspection.
+              {Math.abs(
+                Math.round((1 - output.bytes / output.sizes.direct) * 100),
+              )}
+              % {output.bytes <= output.sizes.direct ? "smaller" : "larger"}).
+              Source preview and JavaScript download contain the decompressed
+              program for inspection.
             </p>
           )}
           {output.warnings.map((w) => (
@@ -941,9 +902,9 @@ export function PackedBuilder() {
             <p className="muted text-xs mt-2">{output.sizes.compressionNote}</p>
             <p className="muted text-xs mt-2">
               Reduce size by selecting fewer scripts, using collections for
-              separate bookmarklets, or choosing minification. Userscript source
-              is preserved verbatim unless experimental JavaScript minification
-              is applied. Gzip can be combined with minification.
+              separate bookmarklets, using separate bookmarklets. Gzip is always
+              applied; userscript source is preserved unless automatic esbuild
+              or Terser optimization is needed.
             </p>
           </details>
         </section>

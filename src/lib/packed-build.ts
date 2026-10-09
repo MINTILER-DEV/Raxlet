@@ -15,29 +15,38 @@ import {
 import { packedCompatibility } from "./packed-compatibility";
 import { validateSource } from "./source";
 import { apiNames } from "../launcher/context";
-import { encodeBookmarklet, selectPackedEncoding } from "./packed-codec";
+import {
+  encodeBookmarklet,
+  selectPackedEncoding,
+  needsPackedOptimization,
+} from "./packed-codec";
 
-export const packedSettingsSchema = z
-  .object({
-    theme: z.enum(["dark", "light", "system"]).default(packedDefaults.theme),
-    position: z
-      .enum(["bottom-right", "bottom-left", "top-right", "top-left"])
-      .default(packedDefaults.position),
-    compact: z.boolean().default(false),
-    initiallyEnabled: z.boolean().default(false),
-    descriptions: z.boolean().default(true),
-    warnings: z.boolean().default(true),
-    search: z.boolean().default(true),
-    minify: z.boolean().default(true),
-    minifyScripts: z.boolean().default(false),
-    terser: z.enum(["off", "always", "auto"]).default("off"),
-    compression: z.boolean().default(false),
-  })
-  .strict()
-  .refine((settings) => settings.terser === "off" || settings.minifyScripts, {
-    message: "Enable experimental JavaScript minification before using Terser.",
-    path: ["terser"],
-  });
+// Old profiles/API clients may send optimizer switches. They no longer control builds.
+export const packedSettingsSchema = z.preprocess(
+  (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return value;
+    return Object.fromEntries(
+      Object.entries(value).filter(
+        ([key]) =>
+          !["minify", "minifyScripts", "terser", "compression"].includes(key),
+      ),
+    );
+  },
+  z
+    .object({
+      theme: z.enum(["dark", "light", "system"]).default(packedDefaults.theme),
+      position: z
+        .enum(["bottom-right", "bottom-left", "top-right", "top-left"])
+        .default(packedDefaults.position),
+      compact: z.boolean().default(false),
+      initiallyEnabled: z.boolean().default(false),
+      descriptions: z.boolean().default(true),
+      warnings: z.boolean().default(true),
+      search: z.boolean().default(true),
+    })
+    .strict(),
+);
 export const packedRequestSchema = z
   .object({
     name: z.string().trim().min(1).max(80).default("Raxlet Packed"),
@@ -174,7 +183,6 @@ export async function buildPacked(
   const runners: string[] = [];
   const scripts: PackedManifest["scripts"] = [];
   let scriptsOriginal = 0;
-  let scriptsPacked = 0;
   for (const { candidate: c, metadata, compatibility, deps } of analyzed) {
     const required = deps.requires.map((url) => {
       const source = contents.get(url)!;
@@ -196,33 +204,8 @@ export async function buildPacked(
       ecmaVersion: "latest",
       sourceType: "script",
     });
-    let packedRunner = runner;
-    if (input.settings.minifyScripts) {
-      // Transform only: no evaluation, plugins, bundling, or filesystem imports.
-      // Keep helper declarations in a local closure. The array avoids assigning
-      // an inferred name to the originally anonymous runner.
-      const result = await transform(`const __raxletRunner=[${runner}];`, {
-        loader: "js",
-        target: "esnext",
-        minify: true,
-        keepNames: true,
-        ignoreAnnotations: true,
-        treeShaking: false,
-        legalComments: "inline",
-      });
-      const expression = `(()=>{${result.code}\nreturn __raxletRunner[0]})()`;
-      parse("(" + expression + ")", {
-        ecmaVersion: "latest",
-        sourceType: "script",
-      });
-      if (
-        encodeBookmarklet(expression).length < encodeBookmarklet(runner).length
-      )
-        packedRunner = expression;
-    }
-    runners.push(packedRunner);
+    runners.push(runner);
     scriptsOriginal += bytes(runner);
-    scriptsPacked += bytes(packedRunner);
     scripts.push({
       id: c.id,
       scriptId: c.scriptId,
@@ -233,12 +216,12 @@ export async function buildPacked(
       metadata,
       enabled: input.settings.initiallyEnabled,
       hash: packedHash(c.source),
-      minified: packedRunner !== runner,
+      minified: false,
       terser: false,
-      packedHash: packedHash(packedRunner),
+      packedHash: packedHash(runner),
       originalBytes: bytes(runner),
       bytes:
-        bytes(packedRunner) +
+        bytes(runner) +
         deps.resources.reduce((sum, r) => sum + bytes(contents.get(r.url)!), 0),
       warnings: compatibility.warnings,
       metaStr:
@@ -279,7 +262,7 @@ export async function buildPacked(
       `void (()=>{\n${runtime}\nRaxletPacked.start(JSON.parse(${JSON.stringify(stableJson(includedManifest))}),[${includedRunners.join(",\n")}]);\n})();`;
     const rawCode = assemble(raw),
       minCode = assemble(minified);
-    const code = input.settings.minify ? minCode : rawCode;
+    const code = minCode;
     const payload = gzipSync(code, { level: 9 }).toString("base64url");
     const compressedCode = `void (()=>{\n${loader}\nvoid RaxletCompressed.start(${JSON.stringify(includedManifest.origin)},${JSON.stringify(payload)},${bytes(code)});\n})();`;
     return {
@@ -287,14 +270,68 @@ export async function buildPacked(
       minCode,
       code,
       payload,
-      ...selectPackedEncoding(code, compressedCode, input.settings.compression),
+      ...selectPackedEncoding(code, compressedCode),
     };
   };
   let result = artifact(runners, manifest);
-  const before = result.bookmarklet.length;
-  const attempted =
-    input.settings.terser === "always" ||
-    (input.settings.terser === "auto" && before > 64000);
+  const esbuildBefore = bytes(result.bookmarklet);
+  const esbuildAttempted = needsPackedOptimization(esbuildBefore);
+  let esbuildScripts = 0;
+  if (esbuildAttempted) {
+    const optimizedRunners: string[] = [];
+    const optimizedScripts: PackedManifest["scripts"] = [];
+    for (let index = 0; index < runners.length; index++) {
+      const runner = runners[index];
+      const transformed = await transform(`const __raxletRunner=[${runner}];`, {
+        loader: "js",
+        target: "esnext",
+        minify: true,
+        keepNames: true,
+        ignoreAnnotations: true,
+        treeShaking: false,
+        legalComments: "inline",
+      });
+      const expression = `(()=>{${transformed.code}\nreturn __raxletRunner[0]})()`;
+      parse("(" + expression + ")", {
+        ecmaVersion: "latest",
+        sourceType: "script",
+      });
+      const smaller =
+        encodeBookmarklet(expression).length < encodeBookmarklet(runner).length;
+      const selected = smaller ? expression : runner;
+      optimizedRunners.push(selected);
+      optimizedScripts.push({
+        ...scripts[index],
+        minified: smaller,
+        packedHash: packedHash(selected),
+        bytes: scripts[index].bytes + bytes(selected) - bytes(runner),
+      });
+    }
+    const optimizedManifest = { ...manifest, scripts: optimizedScripts };
+    const optimizedArtifact = artifact(optimizedRunners, optimizedManifest);
+    if (bytes(optimizedArtifact.bookmarklet) < esbuildBefore) {
+      result = optimizedArtifact;
+      manifest = optimizedManifest;
+      runners.splice(0, runners.length, ...optimizedRunners);
+      esbuildScripts = optimizedScripts.filter(
+        (script) => script.minified,
+      ).length;
+    }
+  }
+  const esbuild = {
+    attempted: esbuildAttempted,
+    applied: esbuildScripts > 0,
+    scripts: esbuildScripts,
+    before: esbuildBefore,
+    after: bytes(result.bookmarklet),
+    note: !esbuildAttempted
+      ? "Esbuild skipped: gzip output is within 65,536 bytes."
+      : esbuildScripts
+        ? "Esbuild reduced the compressed bookmarklet."
+        : "Esbuild did not reduce the compressed bookmarklet; original code was retained.",
+  };
+  const before = bytes(result.bookmarklet);
+  const attempted = needsPackedOptimization(before);
   let terserScripts = 0;
   if (attempted) {
     const optimizedRunners: string[] = [];
@@ -343,23 +380,19 @@ export async function buildPacked(
       const selected = smaller ? expression : runner;
       optimizedRunners.push(selected);
       optimizedScripts.push({
-        ...scripts[index],
-        minified: scripts[index].minified || smaller,
+        ...manifest.scripts[index],
+        minified: manifest.scripts[index].minified || smaller,
         terser: smaller,
         packedHash: packedHash(selected),
-        bytes: scripts[index].bytes + bytes(selected) - bytes(runner),
+        bytes: manifest.scripts[index].bytes + bytes(selected) - bytes(runner),
       });
     }
     const optimizedManifest = { ...manifest, scripts: optimizedScripts };
     const optimizedArtifact = artifact(optimizedRunners, optimizedManifest);
-    // Compare complete URLs, including metadata, encoding, and optional gzip loader.
-    if (optimizedArtifact.bookmarklet.length < before) {
+    // Compare complete URLs, including metadata, encoding, and gzip loader.
+    if (bytes(optimizedArtifact.bookmarklet) < before) {
       result = optimizedArtifact;
       manifest = optimizedManifest;
-      scriptsPacked = optimizedRunners.reduce(
-        (sum, runner) => sum + bytes(runner),
-        0,
-      );
       terserScripts = optimizedScripts.filter((script) => script.terser).length;
     }
   }
@@ -368,16 +401,23 @@ export async function buildPacked(
     applied: terserScripts > 0,
     scripts: terserScripts,
     before,
-    after: result.bookmarklet.length,
-    note:
-      input.settings.terser === "off"
-        ? "Terser is disabled."
-        : !attempted
-          ? "Automatic Terser was skipped: the full bookmarklet is within 64,000 characters after esbuild and optional gzip."
-          : terserScripts
-            ? "Terser reduced the complete bookmarklet URL after esbuild. Original script versions are unchanged."
-            : "Terser was tried but did not reduce the complete bookmarklet URL; the previous artifact was retained.",
+    after: bytes(result.bookmarklet),
+    note: !attempted
+      ? "Terser skipped: the compressed bookmarklet is within 65,536 bytes after esbuild."
+      : terserScripts
+        ? "Terser reduced the compressed bookmarklet after esbuild."
+        : "Terser did not reduce the compressed bookmarklet; the previous artifact was retained.",
   };
+  const scriptsPacked = manifest.scripts.reduce(
+    (sum, script) =>
+      sum +
+      script.bytes -
+      Object.values(script.resources).reduce(
+        (total, resource) => total + bytes(resource),
+        0,
+      ),
+    0,
+  );
   const {
     rawCode,
     minCode,
@@ -391,9 +431,9 @@ export async function buildPacked(
   } = result;
   const warnings: string[] = [];
   const minifiedScripts = manifest.scripts.filter((s) => s.minified).length;
-  if (input.settings.minifyScripts) {
+  if (esbuild.applied || terser.applied) {
     warnings.push(
-      "Experimental esbuild minification changes userscript and @require source. Function/class names and legal comments are retained, but source inspection and optimization-sensitive behavior may differ. Test on a target page; original versions remain unchanged.",
+      "Automatic JavaScript minification (esbuild/Terser) changes userscript and @require source. Function/class names and legal comments are retained, but source inspection and optimization-sensitive behavior may differ. Test on a target page; original versions remain unchanged.",
     );
     if (minifiedScripts < scripts.length)
       warnings.push(
@@ -402,15 +442,11 @@ export async function buildPacked(
   }
   if (compressionApplied)
     warnings.push(
-      "Experimental gzip compression requires native browser decompression and dynamic JavaScript execution. CSP or Trusted Types may block it. Use the standard bookmarklet fallback if it fails.",
+      "Gzip compression requires native browser decompression and dynamic JavaScript execution. CSP or Trusted Types may block it. Use the standard bookmarklet fallback if it fails.",
     );
-  if (input.settings.compression && !compressionApplied)
+  if (needsPackedOptimization(bytes(bookmarklet)))
     warnings.push(
-      "Compression did not reduce the final URL size after loader overhead; a standard bookmarklet was generated instead.",
-    );
-  if (bookmarklet.length > 64000)
-    warnings.push(
-      "This bookmarklet exceeds the conservative 64,000-character target. Browser and bookmark-sync limits vary; test saving and launching it or split the build.",
+      "This bookmarklet still exceeds 65,536 bytes after automatic gzip, esbuild, and Terser optimization. Browser and bookmark-sync limits vary; select fewer scripts or split the build.",
     );
   if (bookmarklet.length > 4000000)
     throw new Error(
@@ -423,6 +459,7 @@ export async function buildPacked(
     bookmarkletHash: packedHash(bookmarkletCode),
     compressionApplied,
     minifiedScripts,
+    esbuild,
     terser,
     bookmarklet,
     manifest,
@@ -431,12 +468,10 @@ export async function buildPacked(
     bytes: bytes(bookmarklet),
     codeBytes: bytes(code),
     generatedAt: new Date().toISOString(),
-    compression: compressionApplied
-      ? "Experimental gzip + base64url · native decompression and dynamic execution"
-      : "None · directly executable JavaScript",
-    compatibility: compressionApplied
-      ? "Experimental: requires DecompressionStream (gzip) and CSP/Trusted Types permission for Function compilation, in addition to ordinary bookmarklet compatibility."
-      : "Compatible HTTP(S) pages only; CSP, Trusted Types, browser restrictions, and userscript behavior still apply.",
+    compression:
+      "Gzip + base64url · native decompression and dynamic execution",
+    compatibility:
+      "Requires DecompressionStream (gzip) and CSP/Trusted Types permission for Function compilation, in addition to ordinary bookmarklet compatibility.",
     sizes: {
       unminified: bytes(encodeBookmarklet(rawCode)),
       minified: bytes(encodeBookmarklet(minCode)),
@@ -446,7 +481,7 @@ export async function buildPacked(
       direct: bytes(directBookmarklet),
       compressed: bytes(compressedBookmarklet),
       compressionNote:
-        "Compressed URL size includes the gzip payload, base64url, native decompression loader, and URL encoding. Gzip/base64url alone is a lower bound excluding loader overhead. Compression is opt-in and used only when the complete URL is smaller; dynamic execution can be blocked by CSP/Trusted Types.",
+        "Compressed URL size includes the gzip payload, base64url, native decompression loader, and URL encoding. Gzip/base64url alone is a lower bound excluding loader overhead. Gzip is always applied; dynamic execution can be blocked by CSP/Trusted Types.",
     },
     warnings,
   };

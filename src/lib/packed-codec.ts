@@ -1,3 +1,4 @@
+import { PACKED_SIZE_LIMIT } from "./packed-types";
 export function encodeBookmarklet(source: string) {
   return (
     "javascript:" +
@@ -7,20 +8,18 @@ export function encodeBookmarklet(source: string) {
     )
   );
 }
-export function selectPackedEncoding(
-  code: string,
-  compressedCode: string,
-  enabled: boolean,
-) {
+// Packed builds always use gzip. The direct URL is an explicit compatibility fallback.
+export function selectPackedEncoding(code: string, compressedCode: string) {
   const directBookmarklet = encodeBookmarklet(code);
   const compressedBookmarklet = encodeBookmarklet(compressedCode);
-  const compressionApplied =
-    enabled && compressedBookmarklet.length < directBookmarklet.length;
   return {
     directBookmarklet,
     compressedBookmarklet,
-    compressionApplied,
-    bookmarkletCode: compressionApplied ? compressedCode : code,
-    bookmarklet: compressionApplied ? compressedBookmarklet : directBookmarklet,
+    compressionApplied: true,
+    bookmarkletCode: compressedCode,
+    bookmarklet: compressedBookmarklet,
   };
+}
+export function needsPackedOptimization(encodedBytes: number) {
+  return encodedBytes > PACKED_SIZE_LIMIT;
 }

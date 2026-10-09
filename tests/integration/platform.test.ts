@@ -221,17 +221,22 @@ describe("real PostgreSQL platform lifecycle", () => {
     const compressed = await request(
       "packed/build",
       "POST",
-      { ...input, settings: { compression: true } },
+      { ...input, settings: { compression: false } },
       alice,
     );
     expect(compressed.status).toBe(200);
     expect(compressed.json.data.compressionApplied).toBe(true);
+    expect(compressed.json.data.bookmarklet).toBe(output.json.data.bookmarklet);
     expect(compressed.json.data.bytes).toBeLessThan(
       compressed.json.data.sizes.direct,
     );
     expect(compressed.json.data.code).not.toContain(aliceSession);
     expect(compressed.json.data.bookmarkletCode).not.toContain(aliceSession);
-    expect(compressed.json.data.manifest.settings.compression).toBe(true);
+    expect(compressed.json.data.manifest.settings).not.toHaveProperty(
+      "compression",
+    );
+    expect(compressed.json.data.esbuild.attempted).toBe(false);
+    expect(compressed.json.data.terser.attempted).toBe(false);
   });
   it("rejects invalid syntax, empty entry patches, and unconfirmed/unsafe URL imports", async () => {
     expect(

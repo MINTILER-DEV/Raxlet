@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { runInNewContext } from "node:vm";
+import { randomBytes } from "node:crypto";
 import { gunzipSync } from "node:zlib";
-import { encodeBookmarklet, selectPackedEncoding } from "@/lib/packed-codec";
+import {
+  encodeBookmarklet,
+  selectPackedEncoding,
+  needsPackedOptimization,
+} from "@/lib/packed-codec";
 import {
   buildPacked,
   packedHash,
@@ -87,7 +92,38 @@ function capture(output: PackedOutput) {
   return captured!;
 }
 describe("Packed Mode generation", () => {
-  it("runs Terser after esbuild, retaining behavior, names, license, metadata and immutable source hashes", async () => {
+  it("always compresses small builds without running either source minifier, ignoring obsolete preferences", async () => {
+    const output = await build([candidate()], {
+      settings: {
+        ...packedDefaults,
+        compression: false,
+        minifyScripts: true,
+        terser: "always",
+        minify: false,
+      },
+    });
+    expect(output.compressionApplied).toBe(true);
+    expect(output.esbuild.attempted).toBe(false);
+    expect(output.terser.attempted).toBe(false);
+    expect(output.code).toContain(source);
+    expect(output.manifest.settings).toEqual(packedDefaults);
+    expect(output.bytes).toBe(Buffer.byteLength(output.bookmarklet));
+  });
+  it("runs esbuild only when gzip output exceeds 65,536 bytes and stops when esbuild brings it below", async () => {
+    const code = source + "\n// " + randomBytes(100000).toString("base64");
+    const output = await build([candidate(code)]);
+    expect(output.esbuild.before).toBeGreaterThan(65536);
+    expect(output.esbuild.attempted).toBe(true);
+    expect(output.esbuild.applied).toBe(true);
+    expect(output.esbuild.after).toBeLessThanOrEqual(65536);
+    expect(output.terser.attempted).toBe(false);
+    expect(output.manifest.scripts[0].hash).toBe(packedHash(code));
+    const { runners, sandbox } = capture(output);
+    expect(sandbox.packedResult).toBeUndefined();
+    await runners[0]();
+    expect(sandbox.packedResult).toContain("🚀");
+  });
+  it("runs Terser after gzip and esbuild still exceed the limit, preserving dependencies, names, licenses and metadata", async () => {
     const dependency = `/*! dependency license */
       const prefix = 'café 🚀';
       /*! unused dependency license */
@@ -100,32 +136,35 @@ describe("Packed Mode generation", () => {
         "// @grant none",
         "// @grant none\n// @require https://example.com/dependency.js",
       ) +
+      "\n" +
+      Array.from(
+        { length: 1200 },
+        (_, index) =>
+          `const unused${index} = '${randomBytes(80).toString("base64")}';`,
+      ).join("\n") +
       `
-      ${Array.from({ length: 100 }, (_, i) => `const unused${i} = 'removable value ${i}';`).join("\n")}
       function originalFunctionName(value) { return namedDependency(value); }
       /* @__PURE__ */ originalFunctionName(globalThis.sideEffect = ' executed');
       globalThis.minifiedResult = [originalFunctionName.name, NamedDependency.result(), originalFunctionName(' 日本語')];`;
-    const settings = {
-      ...packedDefaults,
-      minifyScripts: true,
-      terser: "always",
-    };
+    const options = { dependenciesApproved: true };
     const output = await build(
       [candidate(code)],
-      { settings, dependenciesApproved: true },
+      options,
       async () => dependency,
     );
     const again = await build(
       [candidate(code)],
-      { settings, dependenciesApproved: true },
+      options,
       async () => dependency,
     );
     expect(output.bookmarklet).toBe(again.bookmarklet);
+    expect(output.esbuild.attempted).toBe(true);
+    expect(output.terser.before).toBeGreaterThan(65536);
     expect(output.terser.attempted).toBe(true);
     expect(output.terser.applied).toBe(true);
     expect(output.terser.after).toBeLessThan(output.terser.before);
-    expect(output.terser.after).toBe(output.characters);
-    expect(output.manifest.scripts[0].terser).toBe(true);
+    expect(output.bytes).toBeLessThanOrEqual(65536);
+    expect(output.terser.after).toBe(output.bytes);
     expect(output.manifest.scripts[0].hash).toBe(packedHash(code));
     expect(output.manifest.scripts[0].dependencies[0].hash).toBe(
       packedHash(dependency),
@@ -143,161 +182,26 @@ describe("Packed Mode generation", () => {
       "café 🚀 日本語",
     ]);
   });
-  it("automatically tries Terser above the full URL target, and skips when gzip already brings it below", async () => {
-    const code =
-      source +
-      "\n" +
-      Array.from(
-        { length: 1600 },
-        (_, i) => `const unused${i} = '${"removable ".repeat(8)}${i}';`,
-      ).join("\n");
-    const settings = { ...packedDefaults, minifyScripts: true, terser: "auto" };
-    const output = await build([candidate(code)], { settings });
-    expect(output.terser.before).toBeGreaterThan(64000);
-    expect(output.terser.attempted).toBe(true);
-    expect(output.terser.applied).toBe(true);
-    expect(output.characters).toBeLessThan(64000);
-    const compressed = await build([candidate(code)], {
-      settings: { ...settings, compression: true },
-    });
-    expect(compressed.sizes.direct).toBeGreaterThan(64000);
-    expect(compressed.terser.before).toBeLessThan(64000);
-    expect(compressed.terser.attempted).toBe(false);
-    expect(compressed.terser.applied).toBe(false);
-    expect(compressed.compressionApplied).toBe(true);
-  });
-  it("uses a strict 64,000-character threshold and keeps the earlier artifact when Terser is larger", async () => {
+  it("retains the earlier compressed artifact when minifiers do not improve it and warns when it remains oversized", async () => {
     const code = source.replace(
       "// @grant none",
       "// @grant none\n// @resource text https://example.com/text",
     );
-    const options = {
-      settings: { ...packedDefaults, minifyScripts: true, terser: "auto" },
-      dependenciesApproved: true,
-    };
-    const baseline = await build([candidate(code)], options, async () => "");
-    expect(baseline.terser.attempted).toBe(false);
-    let padding = 64000 - baseline.characters;
-    const probe = await build([candidate(code)], options, async () =>
-      "x".repeat(padding),
+    const resource = randomBytes(100000).toString("base64");
+    const output = await build(
+      [candidate(code)],
+      { dependenciesApproved: true },
+      async () => resource,
     );
-    // Account for digit-width changes in recorded dependency/contribution sizes.
-    padding -= probe.terser.before - 64000;
-    const exact = await build([candidate(code)], options, async () =>
-      "x".repeat(padding),
-    );
-    expect(exact.characters).toBe(64000);
-    expect(exact.terser.attempted).toBe(false);
-    const over = await build([candidate(code)], options, async () =>
-      "x".repeat(padding + 1),
-    );
-    expect(over.terser.before).toBe(64001);
-    expect(over.terser.attempted).toBe(true);
-    expect(over.terser.applied).toBe(false);
-    expect(over.characters).toBe(over.terser.before);
-    expect(over.terser.note).toContain("previous artifact");
-    expect(over.warnings.join(" ")).toContain("64,000");
-    expect(
-      packedRequestSchema.safeParse({
-        selections: [{ id: "a", versionId: "a-v1" }],
-        settings: { terser: "always" },
-      }).success,
-    ).toBe(false);
-  });
-  it("minifies scripts and dependencies without running them, retaining names, licenses, metadata and original hashes", async () => {
-    const dependency = `/*! dependency license */
-      const dependencyPrefix = 'café 🚀';
-      function namedDependency(value) { return dependencyPrefix + value; }
-      class NamedDependency { static result() { return NamedDependency.name; } }
-      globalThis.dependencyExecuted = true;
-    `;
-    const code =
-      source.replace(
-        "// @grant none",
-        "// @grant none\n// @require https://example.com/dependency.js",
-      ) +
-      `
-      ${"// padding removed by minification\n".repeat(80)}
-      function originalFunctionName(value) { return namedDependency(value); }
-      /* @__PURE__ */ originalFunctionName(globalThis.sideEffect = ' executed');
-      globalThis.minifiedResult = [originalFunctionName.name, NamedDependency.result(), originalFunctionName(' 日本語')];
-      const evalSensitiveVariable = 'eval scope';
-      globalThis.evalResult = eval('evalSensitiveVariable');
-    `;
-    const options = {
-      settings: { ...packedDefaults, minifyScripts: true },
-      dependenciesApproved: true,
-    };
-    const load = vi.fn(async () => dependency);
-    const output = await build([candidate(code)], options, load);
-    const again = await build([candidate(code)], options, load);
-    expect(output.bookmarklet).toBe(again.bookmarklet);
-    expect(output.minifiedScripts).toBe(1);
-    expect(output.sizes.scriptsPacked).toBeLessThan(
-      output.sizes.scriptsOriginal,
-    );
-    expect(output.manifest.scripts[0].hash).toBe(packedHash(code));
-    expect(output.manifest.scripts[0].dependencies[0].hash).toBe(
-      packedHash(dependency),
-    );
-    expect(output.manifest.scripts[0].metadata.custom).toEqual(["one", "two"]);
-    expect(output.manifest.scripts[0].metaStr).toContain("// @custom two");
-    expect(output.code).toContain("/*! dependency license */");
-    expect(output.code).not.toContain("// padding removed by minification");
-    expect(output.compressionApplied).toBe(false);
-    expect(output.code).not.toContain("new Function");
-    expect(globalThis).not.toHaveProperty("dependencyExecuted");
-    const { runners, sandbox } = capture(output);
-    expect(sandbox).not.toHaveProperty("dependencyExecuted");
-    await runners[0]();
-    expect(sandbox.dependencyExecuted).toBe(true);
-    expect(sandbox.sideEffect).toBe(" executed");
-    expect(sandbox.evalResult).toBe("eval scope");
-    expect(sandbox.minifiedResult).toEqual([
-      "originalFunctionName",
-      "NamedDependency",
-      "café 🚀 日本語",
-    ]);
-  });
-  it("keeps a runner unchanged when esbuild name helper overhead increases its encoded size", async () => {
-    const code = `// ==UserScript==
-// @name Small
-// @version 1.0.0
-// @match https://example.com/*
-// ==/UserScript==
-${Array.from({ length: 10 }, (_, i) => `function f${i}(){return ${i}}`).join("")}
-globalThis.result=[${Array.from({ length: 10 }, (_, i) => `f${i}.name`).join(",")}];`;
-    const output = await build([candidate(code)], {
-      settings: { ...packedDefaults, minifyScripts: true },
-    });
-    expect(output.minifiedScripts).toBe(0);
-    expect(output.manifest.scripts[0].minified).toBe(false);
-    expect(output.sizes.scriptsOriginal).toBe(output.sizes.scriptsPacked);
-    expect(output.code).toContain(code);
-    expect(output.warnings.join(" ")).toContain("did not reduce");
-  });
-  it("combines esbuild and gzip while retaining the minified directly executable fallback", async () => {
-    const code = source + "\n" + "// removable padding\n".repeat(200);
-    const output = await build([candidate(code)], {
-      settings: { ...packedDefaults, minifyScripts: true, compression: true },
-    });
-    expect(output.minifiedScripts).toBe(1);
-    expect(output.compressionApplied).toBe(true);
-    const payload = output.bookmarkletCode.match(
-      /RaxletCompressed\.start\([^,]+,"([A-Za-z0-9_-]+)",/,
-    )!;
-    expect(gunzipSync(Buffer.from(payload[1], "base64url")).toString()).toBe(
-      output.code,
-    );
-    const { runners, sandbox } = capture(output);
-    await runners[0]();
-    expect(sandbox.packedResult).toContain("🚀");
-    expect(output.manifest.scripts[0].hash).toBe(packedHash(code));
-    expect(
-      packedRequestSchema.parse({
-        selections: [{ id: "a", versionId: "a-v1" }],
-      }).settings.minifyScripts,
-    ).toBe(false);
+    expect(output.esbuild.attempted).toBe(true);
+    expect(output.terser.attempted).toBe(true);
+    expect(output.terser.applied).toBe(false);
+    expect(output.terser.after).toBe(output.terser.before);
+    expect(output.manifest.scripts[0].resources.text).toBe(resource);
+    expect(output.warnings.join(" ")).toContain("65,536 bytes");
+    expect(needsPackedOptimization(65535)).toBe(false);
+    expect(needsPackedOptimization(65536)).toBe(false);
+    expect(needsPackedOptimization(65537)).toBe(true);
   });
   it("builds deterministically regardless of selection or metadata object key order", async () => {
     const a = candidate(),
@@ -332,7 +236,7 @@ globalThis.result=[${Array.from({ length: 10 }, (_, i) => `f${i}.name`).join(","
     const output = await build();
     expect(
       decodeURIComponent(output.bookmarklet.slice("javascript:".length)),
-    ).toBe(output.code);
+    ).toBe(output.bookmarkletCode);
     expect(output.bookmarklet).not.toMatch(/[\r\n\s]/);
     const { runners, sandbox } = capture(output);
     await runners[0]();
@@ -448,7 +352,7 @@ globalThis.result=[${Array.from({ length: 10 }, (_, i) => `f${i}.name`).join(","
       ),
     ).rejects.toThrow("Unsupported API");
   });
-  it("reports actual encoded sizes, compares compression without enabling it and preserves source in both modes", async () => {
+  it("reports actual encoded sizes and preserves source in small compressed builds", async () => {
     const compact = await build(),
       raw = await build([candidate()], {
         settings: { ...packedDefaults, minify: false },
@@ -457,7 +361,7 @@ globalThis.result=[${Array.from({ length: 10 }, (_, i) => `f${i}.name`).join(","
     expect(compact.bytes).toBe(Buffer.byteLength(compact.bookmarklet));
     expect(compact.codeBytes).toBe(Buffer.byteLength(compact.code));
     expect(compact.sizes.minified).toBeLessThan(compact.sizes.unminified);
-    expect(compact.compression).toContain("None");
+    expect(compact.compression.toLowerCase()).toContain("gzip");
     expect(compact.sizes.compressed).toBeGreaterThan(compact.sizes.gzipBase64);
     expect(raw.code).toContain(source);
     expect(compact.code).toContain(source);
@@ -504,7 +408,7 @@ globalThis.result=[${Array.from({ length: 10 }, (_, i) => `f${i}.name`).join(","
     const first = await build([candidate()], options),
       second = await build([candidate()], options);
     expect(first.compressionApplied).toBe(true);
-    expect(first.compression).toContain("gzip");
+    expect(first.compression.toLowerCase()).toContain("gzip");
     expect(first.bookmarklet).toBe(second.bookmarklet);
     expect(first.bytes).toBeLessThan(first.sizes.direct);
     expect(first.bytes).toBe(first.sizes.compressed);
@@ -522,17 +426,12 @@ globalThis.result=[${Array.from({ length: 10 }, (_, i) => `f${i}.name`).join(","
     expect(unpacked.toString("utf8")).toContain(source);
     expect(encodeBookmarklet(first.code).length).toBe(first.sizes.direct);
   });
-  it("uses the standard artifact when compression is disabled or loader overhead makes it larger", () => {
+  it("always selects the compressed artifact even when loader overhead makes it larger", () => {
     const direct = "void 0;",
       loader = "void '" + "large-loader".repeat(100) + "';";
-    const chosen = selectPackedEncoding(direct, loader, true);
-    expect(chosen.compressionApplied).toBe(false);
-    expect(chosen.bookmarklet).toBe(encodeBookmarklet(direct));
-    expect(selectPackedEncoding(loader, direct, false).compressionApplied).toBe(
-      false,
-    );
-    expect(selectPackedEncoding(loader, direct, true).compressionApplied).toBe(
-      true,
-    );
+    const chosen = selectPackedEncoding(direct, loader);
+    expect(chosen.compressionApplied).toBe(true);
+    expect(chosen.bookmarklet).toBe(encodeBookmarklet(loader));
+    expect(chosen.directBookmarklet).toBe(encodeBookmarklet(direct));
   });
 });

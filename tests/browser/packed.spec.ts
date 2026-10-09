@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { test, expect } from "@playwright/test";
 import { buildPacked, packedRequestSchema } from "../../src/lib/packed-build";
 import { packedCompatibility } from "../../src/lib/packed-compatibility";
@@ -17,13 +18,7 @@ const runs = await GM.getValue('runs', 0);
 await GM.setValue('runs', runs + 1);
 document.querySelector('#result').textContent = 'Offline café 🚀 ' + (runs + 1);
 `;
-async function artifact(
-  code = source,
-  dependencies = false,
-  compression = false,
-  minifyScripts = false,
-  terser: "off" | "always" | "auto" = "off",
-) {
+async function artifact(code = source, dependencies = false) {
   const metadata = parseMetadata(code);
   return buildPacked(
     [
@@ -46,7 +41,6 @@ async function artifact(
     packedRequestSchema.parse({
       selections: [{ id: "fixture", versionId: "fixture-1" }],
       dependenciesApproved: dependencies,
-      settings: { compression, minifyScripts, terser },
     }),
     base,
     async () => "offline resource",
@@ -56,6 +50,7 @@ test("builder selects scripts, saves profiles, previews/downloads output, and ex
   page,
   context,
 }) => {
+  test.setTimeout(90000);
   await page.goto("/register");
   await page.getByLabel("Display name").fill("Packed Tester");
   await page
@@ -67,17 +62,24 @@ test("builder selects scripts, saves profiles, previews/downloads output, and ex
   await page
     .getByRole("button", { name: "Create account", exact: true })
     .click();
-  await expect(page).toHaveURL(/dashboard\/library/);
+  await expect(page).toHaveURL(/dashboard\/library/, { timeout: 30000 });
   const response = await page.request.post(base + "/api/scripts", {
     headers: { origin: base },
-    data: { source, category: "Development" },
+    data: {
+      source: source + "\n// " + randomBytes(100000).toString("base64"),
+      category: "Development",
+    },
   });
   expect(response.status()).toBe(201);
   await page.goto("/dashboard/launcher");
   await page.getByRole("link", { name: "Packed Mode", exact: true }).click();
+  await page.waitForURL(/\/dashboard\/launcher\/packed$/, {
+    waitUntil: "domcontentloaded",
+    timeout: 30000,
+  });
   await expect(
     page.getByRole("heading", { name: "Packed Mode", exact: true }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 30000 });
   await page.getByLabel("Search packed scripts").fill("does not exist");
   await expect(
     page.getByText("No scripts found.", { exact: false }),
@@ -87,39 +89,34 @@ test("builder selects scripts, saves profiles, previews/downloads output, and ex
   await page.getByRole("button", { name: "Select all shown" }).click();
   await expect(page.getByText(/1 selected/)).toBeVisible();
   await page.getByLabel("Build profile name").fill("Offline tools");
-  await page
-    .getByLabel("Experimental Terser second pass")
-    .selectOption("always");
+  await expect(page.getByLabel("Experimental Terser second pass")).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByLabel("Experimental compressed bookmarklet", { exact: true }),
+  ).toHaveCount(0);
   await expect(
     page.getByLabel("Experimental JavaScript minification (esbuild)", {
       exact: true,
     }),
-  ).toBeChecked();
+  ).toHaveCount(0);
+  await page.getByRole("combobox", { name: /^Theme/ }).selectOption("light");
   await page.getByRole("button", { name: "Save profile" }).click();
-  await page.getByLabel("Experimental Terser second pass").selectOption("off");
+  await page.getByRole("combobox", { name: /^Theme/ }).selectOption("dark");
   await page.getByRole("button", { name: "Deselect all" }).click();
   await expect(
     page.getByRole("button", { name: "Generate bookmarklet" }),
   ).toBeDisabled();
   await page.getByRole("button", { name: "Load profile" }).click();
-  await expect(page.getByLabel("Experimental Terser second pass")).toHaveValue(
-    "always",
+  await expect(page.getByRole("combobox", { name: /^Theme/ })).toHaveValue(
+    "light",
   );
-  await page
-    .getByLabel("Experimental JavaScript minification (esbuild)", {
-      exact: true,
-    })
-    .check();
-  await page
-    .getByLabel("Experimental compressed bookmarklet", { exact: true })
-    .check();
   await page.getByRole("button", { name: "Generate bookmarklet" }).click();
-  await expect(page.getByLabel("Generated bookmarklet URL")).toBeAttached();
+  await expect(page.getByLabel("Generated bookmarklet URL")).toBeAttached({
+    timeout: 30000,
+  });
   await expect(
-    page.getByText(/JavaScript minification applied to 1 of 1 scripts/),
-  ).toBeVisible();
-  await expect(
-    page.getByText(/Terser: Terser was tried|Terser: Terser reduced/),
+    page.getByText(/Esbuild reduced the compressed bookmarklet/),
   ).toBeVisible();
   const url = await page.getByLabel("Generated bookmarklet URL").inputValue();
   expect(
@@ -250,7 +247,7 @@ test("direct packed functions work without unsafe-eval, text resources are embed
   await context.setOffline(true);
   await page.evaluate((url) => {
     location.href = url;
-  }, output.bookmarklet);
+  }, encodeBookmarklet(output.code));
   const panel = page.locator("#raxlet-packed-launcher");
   await panel
     .getByRole("button", { name: "Enable or disable Packed café 🚀" })
@@ -276,22 +273,22 @@ test("esbuild and Terser scripts run offline without unsafe-eval and preserve na
       "@grant GM_info\n// @grant GM.getValue",
     ) +
     `
-    ${Array.from({ length: 100 }, (_, i) => `const unused${i} = '${i} removable';`).join("\n")}
+    ${Array.from({ length: 1200 }, (_, i) => `const unused${i} = '${randomBytes(80).toString("base64")}';`).join("\n")}
     ${"// removable padding\n".repeat(100)}
     function originalFunctionName() { return originalFunctionName.name; }
     document.querySelector('#result').textContent += ' ' + originalFunctionName() + ' ' + GM_info.scriptMetaStr.includes('// @grant GM_info');
   `;
-  const output = await artifact(code, false, false, true, "always");
+  const output = await artifact(code);
   expect(output.terser.applied).toBe(true);
   expect(output.minifiedScripts).toBe(1);
-  expect(output.compressionApplied).toBe(false);
+  expect(output.compressionApplied).toBe(true);
   await page.goto("http://127.0.0.1:4311/packed-inline");
   const requests: string[] = [];
   page.on("request", (request) => requests.push(request.url()));
   await context.setOffline(true);
   await page.evaluate((url) => {
     location.href = url;
-  }, output.bookmarklet);
+  }, encodeBookmarklet(output.code));
   const panel = page.locator("#raxlet-packed-launcher");
   await expect(page.locator("#result")).toHaveText("Not run");
   await panel
@@ -342,7 +339,7 @@ test("packed launch refuses the authenticated account origin without executing s
 test("compressed execution reports CSP denial and the standard fallback still works", async ({
   page,
 }) => {
-  const output = await artifact(source, false, true);
+  const output = await artifact();
   expect(output.compressionApplied).toBe(true);
   await page.goto("http://127.0.0.1:4311/packed-inline");
   const dialog = page.waitForEvent("dialog");
@@ -369,7 +366,7 @@ test("compressed execution reports CSP denial and the standard fallback still wo
 test("compressed loader explains missing browser decompression support", async ({
   page,
 }) => {
-  const output = await artifact(source, false, true);
+  const output = await artifact();
   await page.goto("http://127.0.0.1:4311/");
   await page.evaluate(() => {
     Object.defineProperty(window, "DecompressionStream", {
@@ -389,7 +386,7 @@ test("compressed loader explains missing browser decompression support", async (
 test("corrupted gzip fails without opening a launcher or executing a script", async ({
   page,
 }) => {
-  const output = await artifact(source, false, true);
+  const output = await artifact();
   const payload = output.bookmarkletCode.match(
     /RaxletCompressed\.start\("[^"\n]*","([A-Za-z0-9_-]+)"/,
   )![1];
@@ -410,7 +407,7 @@ test("corrupted gzip fails without opening a launcher or executing a script", as
 test("compressed loader blocks the account origin before decompression or dynamic compilation", async ({
   page,
 }) => {
-  const output = await artifact(source, false, true);
+  const output = await artifact();
   await page.goto("/");
   await page.evaluate(() => {
     Object.defineProperty(window, "DecompressionStream", {
